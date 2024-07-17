@@ -4,12 +4,15 @@
 
 #include <parapara/parapara.h>
 
-std::string failure_name(parapara::failure f) {
-    if (std::get_if<parapara::read_failure>(&f)) return "read failure";
-    if (std::get_if<parapara::invalid_value>(&f)) return "invalid value";
-    if (std::get_if<parapara::unsupported_type>(&f)) return "unsupported type";
-    if (std::get_if<parapara::internal_type_mismatch>(&f)) return "internal error";
-    return "?";
+std::string explain(const parapara::failure& f) {
+    std::string msg = name(f);
+    if (auto p = std::get_if<parapara::invalid_value>(&f); p && !p->constraint.empty()) {
+        msg += ", constraint: " + p->constraint;
+    }
+    if (const auto& key = context(f).key; !key.empty()) {
+        msg += ", key: " + key;
+    }
+    return msg;
 }
 
 int main() {
@@ -18,7 +21,7 @@ int main() {
     std::string repn = "23.4, 178.9, NaN";
     auto h = R.read<std::vector<float>>(repn);
 
-    if (!h) std::cout << "failure\n";
+    if (!h) std::cout << "failure: " << explain(h.error()) << '\n';
     else {
         for (auto& f: h.value()) std::cout << f << '\n';
     }
@@ -30,7 +33,7 @@ int main() {
 
     std::string repn2 = "23.4; 178.9; NaN; inf";
     auto h2 = S.read<std::list<double>>(repn2);
-    if (!h2) std::cout << "failure\n";
+    if (!h2) std::cout << "failure: " << explain(h2.error()) << '\n';
     else {
         for (auto& f: h2.value()) std::cout << f << '\n';
     }
@@ -45,7 +48,7 @@ int main() {
         std::cout << "ok; record.x = " << rec.x << '\n';
     }
     else {
-        std::cout << "failure: context key: " << context(hv.error()).key << '\n';
+        std::cout << "failure: " << explain(hv.error()) << '\n';
     }
 
     parapara::specification xs_spec{"xs", &record::xs};
@@ -55,15 +58,23 @@ int main() {
         std::cout << '\n';
     }
     else {
-        std::cout << "failure: " << failure_name(hv.error()) << "; context key: " << context(hv.error()).key << '\n';
+        std::cout << "failure: " << explain(hv.error()) << '\n';
     }
 
+    // auto is_even = [](auto n) { return !(n%2); };
+    parapara::validator require_even([](auto n) { return !(n%2); }, "value is even");
+
     parapara::specification x_spec2("x", &record::x,
-        parapara::assert([](int n) { return n%2==0; }, "value is even"));
-    if (auto hv = x_spec2.assign(rec, 8)) {
+        //parapara::require([](int n) { return n%2==0; }, "value is even") >>=
+        //parapara::require(is_even, "value is even") >>=
+        require_even &=
+        parapara::minimum(5) &=
+        parapara::maximum(10, "value is at most 10"));
+
+    if (auto hv = x_spec2.assign(rec, 12)) {
         std::cout << "ok; record.x = " << rec.x << '\n';
     }
     else {
-        std::cout << "failure: " << failure_name(hv.error()) << "; context key: " << context(hv.error()).key << '\n';
+        std::cout << "failure: " << explain(hv.error()) << '\n';
     }
 }

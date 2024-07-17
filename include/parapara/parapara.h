@@ -3,7 +3,6 @@
 #include <expected>
 #include <functional>
 #include <iterator>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -45,11 +44,13 @@ struct failure_context {
 
 struct read_failure {
     failure_context ctx;
+    static constexpr auto name() { return "read failure"; };
 };
 
 struct invalid_value {
     std::string constraint;  // optionally supplied by a parameter constraint
     failure_context ctx;
+    static constexpr auto name() { return "invalid value"; };
 };
 
 struct unsupported_type {
@@ -69,6 +70,14 @@ inline failure_context context(const failure& f) {
 inline failure_context& context(failure& f) {
     return std::visit([](auto& x) -> failure_context& { return x.ctx; }, f);
 }
+
+// some names for failure classes
+
+constexpr auto name(read_failure) { return "read failure"; }
+constexpr auto name(invalid_value) { return "invalid value"; }
+constexpr auto name(unsupported_type) { return "unsupported type"; }
+constexpr auto name(internal_type_mismatch) { return "internal error"; }
+constexpr auto name(failure f) { return std::visit([](const auto& x) { return name(x); }, f); }
 
 // hopefully<T> is the expected alias used for representing results
 // from parapara routines that can encode the above failure conditions.
@@ -361,15 +370,21 @@ inline const reader<std::string_view>& default_reader() {
     return s;
 }
 
-// Section IV: Parameter specifications, parameter sets
-// ====================================================
+// IV: Parameter specifications, specification sets
+// ================================================
 
-// TODO replace concepts, requires with enable_if clauses
+// Note that validators given to a specification do not need to be of type
+// parapara::validator<X> for some X.
+
+template <typename V, typename U, typename = void>
+struct validates_parameter: std::false_type {};
 
 template <typename V, typename U>
-concept ParameterValidatorFor = requires (V v, U u) {
-    {v(std::declval<U>())} -> std::convertible_to<hopefully<U>>;
-};
+struct validates_parameter<V, U, std::void_t<std::invoke_result_t<V, U>>>:
+    std::is_convertible<std::invoke_result_t<V, U>, hopefully<U>> {};
+
+template <typename V, typename U>
+inline constexpr bool validates_parameter_v = validates_parameter<V, U>::value;
 
 
 // TODO Add special case for dealing with fields of type optional<X>.
@@ -380,8 +395,7 @@ struct specification {
     std::string description;
     const std::type_index field_type;
 
-    template <typename Field, typename V>
-    requires ParameterValidatorFor<V, Field>
+    template <typename Field, typename V, std::enable_if_t<validates_parameter_v<V, Field>, int> = 0>
     specification(std::string key, Field Record::* field_ptr, V validate, std::string description = ""):
         key(std::move(key)),
         description(description),
@@ -418,82 +432,161 @@ private:
 // key canonicalization
 
 std::string keys_lc(std::string_view v) {
-    using std::views::transform;
-
     std::string out;
-    std::ranges::copy(
-        v |
-        transform([](unsigned char c) { return std::tolower(c); }),
-        std::back_inserter(out));
+    for (char c: v) out.push_back(std::tolower(c));
     return out;
 }
 
 std::string keys_lc_nows(std::string_view v) {
-    using std::views::transform;
-    using std::views::filter;
-
     std::string out;
-    std::ranges::copy(v |
-        filter([](unsigned char c) { return !std::isspace(c); }) |
-        transform([](unsigned char c) { return std::tolower(c); }),
-        std::back_inserter(out));
+    for (char c: v) {
+        if (isspace(c)) continue;
+        else out.push_back(std::tolower(c));
+    }
     return out;
 }
 
+template <typename F>
+inline constexpr bool is_key_canonicalizer_v = std::is_invocable_r_v<std::string, F, std::string_view>;
+
+namespace detail {
+    using std::begin;
+
+    template <typename X>
+    using deref_begin_t = decltype(*begin(std::declval<X>()));
+}
+
+template <typename X, typename V>
+inline constexpr bool is_range_of_v = std::is_assignable_v<V&, detail::deref_begin_t<X>>;
+
+
 template <typename Record>
 struct specification_set {
-    std::unordered_map<std::string, specification<Record>> set;
+    // Specification sets can be constructed from a sequence of specification objects and collections of specification objects.
+    // If a non-trivial key transformation (canonicalizer) is provided, it must be the first argument to the constructor.
 
-    template <typename Collection> // imagine I've put a requires clause on this
-    explicit specification_set(const Collection& c, std::function<std::string (std::string_view)> cify = {}):
-        canonicalize_(cify)
+    template <typename KC, typename... Ts, std::enable_if_t<is_key_canonicalizer_v<KC>, int> = 0>
+    explicit specification_set(KC&& kc, Ts&&... ts):
+        canonicalize_(std::forward<KC>(kc))
     {
-        for (const specification<Record>& spec: c) {
-            std::string k = canonicalize(c.key);
-            auto [_, inserted] = set_.emplace(k, spec);
-
-            if (!inserted) throw bad_key_set(c.key);
-        }
+        generic_insert_(std::forward<Ts>(ts)...);
     }
 
-    std::string canonicalize(std::string_view v) const { return canonicalize_? canonicalize_(v): std::string(v); }
+    template <typename A, typename... Ts, std::enable_if_t<!is_key_canonicalizer_v<A>, int> = 0>
+    explicit specification_set(A&& a, Ts&&... ts) {
+        generic_insert_(std::forward<A>(a), std::forward<Ts>(ts)...);
+    }
+
+    specification_set() = default;
+
+    std::string canonicalize(std::string_view v) const {
+        return canonicalize_? canonicalize_(v): std::string(v);
+    }
 
     bool contains(std::string_view key) const { return set_.contains(canonicalize(key)); }
-    const specification<Record>& at(std::string_view key) const { return set_.at(canonicalize(key)); }
+
+    const specification<Record>& at(std::string_view key) const {
+        return set_.at(canonicalize(key));
+    }
+
     const specification<Record>* get_if(std::string_view key) const {
-        auto i = set_.find(canonicalize(key));
-        if (i==set_.end()) return nullptr;
-        else return &(*i);
+        if (auto i = set_.find(canonicalize(key)); i==set_.end()) return nullptr; else return &(*i);
     }
 
 private:
+    template <typename A, typename... Ts, std::enable_if_t<is_range_of_v<A, specification<Record>>, int> = 0>
+    void generic_insert_(A&& collection, Ts&&... ts) {
+        for (const specification<Record>& s: collection) {
+            std::string key = s.key;
+            if (auto [_, inserted] = set_.emplace(canonicalize(key), std::move(s)); !inserted) throw bad_key_set(key);
+        }
+
+        generic_insert_(std::forward<Ts>(ts)...);
+    }
+
+    template <typename... Ts>
+    void generic_insert_(specification<Record> s, Ts&&... ts) {
+        std::string key = s.key;
+        if (auto [_, inserted] = set_.emplace(canonicalize(key), std::move(s)); !inserted) throw bad_key_set(key);
+
+        generic_insert_(std::forward<Ts>(ts)...);
+    }
+
+    void generic_insert_() {}
+
     std::unordered_map<std::string, specification<Record>> set_;
     std::function<std::string (std::string_view)> canonicalize_;
 };
 
-// Validator chaining, default validators
-// (viz. operator>>= overloads, wrappers (parapara::assert) for value predicates, interval checks.
+// V. Validation helpers
+// =====================
+//
+// The validator passed to the specification constructor can be any functional that takes a field value
+// of type U to hopefully<U>. The validator class below provides a convenience interface to producing
+// such functionals and also allows Kleisli composition via operator|= defined below.
+
+template <typename Predicate = void> struct validator;
+
+template <> struct validator<void> {};
 
 template <typename Predicate>
-auto assert(Predicate p, std::string constraint = "") {
-    return [p, constraint](auto value) -> hopefully<decltype(value)> { if (p(value)) return value; else return std::unexpected(invalid_value{constraint, {}}); };
+struct validator: validator<void> {
+    Predicate p;
+    std::string constraint;
+
+    validator(Predicate p, std::string constraint): p(std::move(p)), constraint(std::move(constraint)) {}
+
+    template <typename A>
+    hopefully<A> operator()(const A& a) const { if (p(a)) return a; else return std::unexpected(invalid_value(constraint, {})); }
+};
+
+template <typename X>
+inline constexpr bool is_validator_v = std::is_base_of_v<validator<>, X>;
+
+template <typename Predicate>
+auto require(Predicate p, std::string constraint = "") {
+    return validator(std::move(p), std::move(constraint));
 }
 
 template <typename Value>
 auto minimum(Value v, std::string constraint = "value at least minimum") {
-    return [v, constraint](auto value) -> hopefully<decltype(value)> { if (value>=v) return value; else return std::unexpected(invalid_value{constraint, {}}); };
+    return validator([v = std::move(v)](auto x) { return x>=v; }, std::move(constraint));
 }
 
 template <typename Value>
 auto maximum(Value v, std::string constraint = "value at most maximum") {
-    return [v, constraint](auto value) -> hopefully<decltype(value)> { if (value<=v) return value; else return std::unexpected(invalid_value{constraint, {}}); };
+    return validator([v = std::move(v)](auto x) { return x<=v; }, std::move(constraint));
 }
 
-// Put some guards on this!
+// Operator (right associative) for Kleisli composition in std::expect. ADL will find this operator when the first
+// argument is e.g. derived from parapara::validator<>.
+
 template <typename V1, typename V2>
-auto operator>>=(V1 v1, V2 v2) {
-    return [v1, v2](auto hv) { return hv.and_then(v1).and_then(v2); };
+auto operator&=(V1 v1, V2 v2) {
+    return [v1, v2](auto x) { return v1(x).and_then(v2); };
 }
 
+
+// VI. Importers (and later, exporters)
+// ====================================
+//
+//
+// import_kv_pairs:
+//
+//     Split into records delimited by \r, \r\n, or \n and then split into two fields k, v separated by the first occurance of `fs`.
+//     Assign corresponding field k of record from value v.
+//
+// import_ini:
+//
+//     Scan (a particular variant of) an INI-style configuration, at most one record per line with lines delimited by \r, \r\n or \n.
+//     Comments (lines starting with '#') are skipped.
+//     Lines of the form [ _section_ ], ignoring leading and trailing whitespace, set the current section to _section_.
+//     Lines of the form _k_ = _v_, ignoring leading and trailing whitespace and whitespace about the '=' sign will assign
+//     the corresponding field _section_/_k_ (or just _k_ if _section_ is empty or unset) from value _v_, where / stands for
+//     thw key separator. Whitespace surrounding _k_ or _v_ is ignored.
+
+template <typename Record>
+void import_kv_pairs(Record &rec, const specification_set<Record>& specs, std::string_view text, reader<std::string_view> rdr) {
+}
 
 } // namespace parapara
