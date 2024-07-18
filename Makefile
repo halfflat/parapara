@@ -3,7 +3,7 @@
 
 top:=$(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 
-examples:=ex1 ex2
+examples:=ex1 ex2 ex3
 all:: unit $(examples)
 
 #test-src:=unit.cc test_expected.cc
@@ -42,6 +42,9 @@ ex1: ex1.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
 ex2: ex2.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+ex3: ex3.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
 

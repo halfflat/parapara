@@ -4,24 +4,13 @@
 
 #include <parapara/parapara.h>
 
-std::string explain(const parapara::failure& f) {
-    std::string msg = name(f);
-    if (auto p = std::get_if<parapara::invalid_value>(&f); p && !p->constraint.empty()) {
-        msg += ", constraint: " + p->constraint;
-    }
-    if (const auto& key = context(f).key; !key.empty()) {
-        msg += ", key: " + key;
-    }
-    return msg;
-}
-
 int main() {
     parapara::reader R = parapara::default_reader();
 
     std::string repn = "23.4, 178.9, NaN";
     auto h = R.read<std::vector<float>>(repn);
 
-    if (!h) std::cout << "failure: " << explain(h.error()) << '\n';
+    if (!h) std::cout << explain(h.error()) << '\n';
     else {
         for (auto& f: h.value()) std::cout << f << '\n';
     }
@@ -33,7 +22,7 @@ int main() {
 
     std::string repn2 = "23.4; 178.9; NaN; inf";
     auto h2 = S.read<std::list<double>>(repn2);
-    if (!h2) std::cout << "failure: " << explain(h2.error()) << '\n';
+    if (!h2) std::cout << explain(h2.error()) << '\n';
     else {
         for (auto& f: h2.value()) std::cout << f << '\n';
     }
@@ -48,7 +37,7 @@ int main() {
         std::cout << "ok; record.x = " << rec.x << '\n';
     }
     else {
-        std::cout << "failure: " << explain(hv.error()) << '\n';
+        std::cout << explain(hv.error()) << '\n';
     }
 
     parapara::specification xs_spec{"xs", &record::xs};
@@ -58,7 +47,7 @@ int main() {
         std::cout << '\n';
     }
     else {
-        std::cout << "failure: " << explain(hv.error()) << '\n';
+        std::cout << explain(hv.error()) << '\n';
     }
 
     // auto is_even = [](auto n) { return !(n%2); };
@@ -75,6 +64,6 @@ int main() {
         std::cout << "ok; record.x = " << rec.x << '\n';
     }
     else {
-        std::cout << "failure: " << explain(hv.error()) << '\n';
+        std::cout << explain(hv.error()) << '\n';
     }
 }
