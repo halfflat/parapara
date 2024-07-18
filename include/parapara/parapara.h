@@ -543,9 +543,6 @@ using value_type_t = typename value_type<std::remove_reference_t<X>>::type;
 
 template <typename Record>
 struct specification_set {
-    // Specification sets can be constructed from a sequence of specification objects and collections of specification objects.
-    // If a non-trivial key transformation (canonicalizer) is provided, it must be the first argument to the constructor.
-
     specification_set() = default;
 
     template <typename C, std::enable_if_t<std::is_assignable_v<specification<Record>&, value_type_t<C>>, int> = 0>
@@ -651,9 +648,9 @@ auto operator&=(V1 v1, V2 v2) {
 //
 // import_ini:
 //
-//     From a std::istream, parse key/value records line by line from an INI style specification.
+//     From a std::istream, parse key/value records line by line from an INI-style specification.
 //     Lines of the form [ _section_ ], ignoring leading and trailing whitespace, set the current section to _section_.
-//     Comments (lines starting with '#') are skipped.
+//     Comments (lines starting with optional whitespace followed by '#') are skipped.
 //     Lines of the form _k_ = _v_ will assign the corresponding field _section_/_k_ (or just _k_ if _section_ is empty
 //     or unset) from value _v_, where / stands for the key separator. Whitespace surrounding _k_ or _v_ is ignored.
 
