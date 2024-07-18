@@ -38,30 +38,42 @@ namespace parapara {
 struct failure_context {
     std::string key;     // associated parameter key, if any.
     std::string source;  // e.g. file name
-    unsigned nr = 0;     // record number/line number.
-    unsigned offset = 0; // offset into record or line.
+    unsigned nr = 0;     // record number/line number (1-based).
+    unsigned cindex = 0; // character index into record/line (1-based).
 };
 
+// parameter value failed to parse
 struct read_failure {
     failure_context ctx;
-    static constexpr auto name() { return "read failure"; };
 };
 
+// parameter value failed to validate
 struct invalid_value {
     std::string constraint;  // optionally supplied by a parameter constraint
     failure_context ctx;
-    static constexpr auto name() { return "invalid value"; };
 };
 
+// missing read or writer for parameter type
 struct unsupported_type {
     failure_context ctx;
 };
 
+// internal error: something went awry with all the type-erasure
 struct internal_type_mismatch {
     failure_context ctx;
 };
 
-using failure = std::variant<read_failure, invalid_value, unsupported_type, internal_type_mismatch>;
+// key missing from specification set
+struct unrecognized_key {
+    failure_context ctx;
+};
+
+// general parse failure in importer
+struct bad_syntax {
+    failure_context ctx;
+};
+
+using failure = std::variant<read_failure, invalid_value, unsupported_type, internal_type_mismatch, unrecognized_key, bad_syntax>;
 
 inline failure_context context(const failure& f) {
     return std::visit([](auto x) { return x.ctx; }, f);
@@ -77,6 +89,8 @@ constexpr auto name(read_failure) { return "read failure"; }
 constexpr auto name(invalid_value) { return "invalid value"; }
 constexpr auto name(unsupported_type) { return "unsupported type"; }
 constexpr auto name(internal_type_mismatch) { return "internal error"; }
+constexpr auto name(unrecognized_key) { return "unrecognized key"; }
+constexpr auto name(bad_syntax) { return "bad syntax"; }
 constexpr auto name(failure f) { return std::visit([](const auto& x) { return name(x); }, f); }
 
 // hopefully<T> is the expected alias used for representing results
@@ -112,11 +126,23 @@ struct bad_key_set: parapara_error {
     std::string key; // offending key, if any, that caused a key collision.
 };
 
+#if 0
+// Do we actually need these?
+
 // Thrown by a parameter importer when encountering misformed input.
 
 struct syntax_error: parapara_error {
     explicit syntax_error(failure_context ctx = {}):
        parapara_error("misformed text in parameter data"), ctx(std::move(ctx)) {}
+
+    failure_context ctx;
+};
+
+// Thrown by a parameter importer when encountering an unknown key.
+
+struct syntax_error: parapara_error {
+    explicit syntax_error(failure_context ctx = {}):
+       parapara_error("unrecognized key"), ctx(std::move(ctx)) {}
 
     failure_context ctx;
 };
@@ -140,6 +166,7 @@ struct value_error: parapara_error {
     std::string constraint;
     failure_context ctx;
 };
+#endif
 
 // II. Reader/writer utilities
 // ===========================
@@ -391,9 +418,10 @@ inline constexpr bool validates_parameter_v = validates_parameter<V, U>::value;
 
 template <typename Record>
 struct specification {
+    using record_type = Record;
     std::string key;
     std::string description;
-    const std::type_index field_type;
+    std::type_index field_type;
 
     template <typename Field, typename V, std::enable_if_t<validates_parameter_v<V, Field>, int> = 0>
     specification(std::string key, Field Record::* field_ptr, V validate, std::string description = ""):
@@ -417,11 +445,11 @@ struct specification {
     {}
 
     template <typename Reader = reader<std::string_view>>
-    hopefully<void> read(Record& record, typename Reader::representation_type repn, const Reader rdr = default_reader()) {
+    hopefully<void> read(Record& record, typename Reader::representation_type repn, const Reader rdr = default_reader()) const {
         return rdr.read(field_type, repn).and_then([this, &record](auto a) { return assign(record, std::move(a)); });
     }
 
-    hopefully<void> assign(Record& record, std::any value) {
+    hopefully<void> assign(Record& record, std::any value) const {
         return assign_impl_(record, value).transform_error([this](failure f) { context(f).key = key; return f; });
     }
 
@@ -446,38 +474,39 @@ std::string keys_lc_nows(std::string_view v) {
     return out;
 }
 
-template <typename F>
-inline constexpr bool is_key_canonicalizer_v = std::is_invocable_r_v<std::string, F, std::string_view>;
+template <typename X>
+struct value_type { using type = typename X::value_type; };
 
-namespace detail {
-    using std::begin;
+template <typename X, std::size_t N>
+struct value_type<X [N]> { using type = X; };
 
-    template <typename X>
-    using deref_begin_t = decltype(*begin(std::declval<X>()));
-}
+template <typename X>
+using value_type_t = typename value_type<std::remove_reference_t<X>>::type;
 
-template <typename X, typename V>
-inline constexpr bool is_range_of_v = std::is_assignable_v<V&, detail::deref_begin_t<X>>;
-
+// Specification sets comprise a collection of specifications over the same record type with unique keys
+// which optionally are first transformed into a canonical form by a supplied canonicalizer.
+//
+// They are constructed from an existing container or range of specifications together win an optional
+// canonicalizer.
 
 template <typename Record>
 struct specification_set {
     // Specification sets can be constructed from a sequence of specification objects and collections of specification objects.
     // If a non-trivial key transformation (canonicalizer) is provided, it must be the first argument to the constructor.
 
-    template <typename KC, typename... Ts, std::enable_if_t<is_key_canonicalizer_v<KC>, int> = 0>
-    explicit specification_set(KC&& kc, Ts&&... ts):
-        canonicalize_(std::forward<KC>(kc))
-    {
-        generic_insert_(std::forward<Ts>(ts)...);
-    }
-
-    template <typename A, typename... Ts, std::enable_if_t<!is_key_canonicalizer_v<A>, int> = 0>
-    explicit specification_set(A&& a, Ts&&... ts) {
-        generic_insert_(std::forward<A>(a), std::forward<Ts>(ts)...);
-    }
-
     specification_set() = default;
+
+    template <typename C, std::enable_if_t<std::is_assignable_v<specification<Record>&, value_type_t<C>>, int> = 0>
+    specification_set(const C& specs, std::function<std::string (std::string_view)> cify = {}):
+        canonicalize_(cify)
+    {
+        for (specification<Record> s: specs) insert(std::move(s));
+    }
+
+    void insert(specification<Record> s) {
+        std::string key = s.key;
+        if (auto [_, inserted] = set_.emplace(canonicalize(key), std::move(s)); !inserted) throw bad_key_set(key);
+    }
 
     std::string canonicalize(std::string_view v) const {
         return canonicalize_? canonicalize_(v): std::string(v);
@@ -490,33 +519,19 @@ struct specification_set {
     }
 
     const specification<Record>* get_if(std::string_view key) const {
-        if (auto i = set_.find(canonicalize(key)); i==set_.end()) return nullptr; else return &(*i);
+        if (auto i = set_.find(canonicalize(key)); i==set_.end()) return nullptr; else return &(i->second);
     }
 
 private:
-    template <typename A, typename... Ts, std::enable_if_t<is_range_of_v<A, specification<Record>>, int> = 0>
-    void generic_insert_(A&& collection, Ts&&... ts) {
-        for (const specification<Record>& s: collection) {
-            std::string key = s.key;
-            if (auto [_, inserted] = set_.emplace(canonicalize(key), std::move(s)); !inserted) throw bad_key_set(key);
-        }
-
-        generic_insert_(std::forward<Ts>(ts)...);
-    }
-
-    template <typename... Ts>
-    void generic_insert_(specification<Record> s, Ts&&... ts) {
-        std::string key = s.key;
-        if (auto [_, inserted] = set_.emplace(canonicalize(key), std::move(s)); !inserted) throw bad_key_set(key);
-
-        generic_insert_(std::forward<Ts>(ts)...);
-    }
-
-    void generic_insert_() {}
-
     std::unordered_map<std::string, specification<Record>> set_;
     std::function<std::string (std::string_view)> canonicalize_;
 };
+
+template <typename X>
+specification_set(X&) -> specification_set<typename value_type_t<X>::record_type>;
+
+template <typename X>
+specification_set(X&, std::function<std::string (std::string_view)>) -> specification_set<typename value_type_t<X>::record_type>;
 
 // V. Validation helpers
 // =====================
@@ -573,20 +588,170 @@ auto operator&=(V1 v1, V2 v2) {
 //
 // import_kv_pairs:
 //
-//     Split into records delimited by \r, \r\n, or \n and then split into two fields k, v separated by the first occurance of `fs`.
+//     Split into records delimited by \n and then split into two fields k, v separated by the first occurance of `fs`.
 //     Assign corresponding field k of record from value v.
 //
 // import_ini:
 //
-//     Scan (a particular variant of) an INI-style configuration, at most one record per line with lines delimited by \r, \r\n or \n.
+//     Scan (a particular variant of) an IrI-style configuration, at most one record per line with lines delimited by \n.
 //     Comments (lines starting with '#') are skipped.
 //     Lines of the form [ _section_ ], ignoring leading and trailing whitespace, set the current section to _section_.
 //     Lines of the form _k_ = _v_, ignoring leading and trailing whitespace and whitespace about the '=' sign will assign
 //     the corresponding field _section_/_k_ (or just _k_ if _section_ is empty or unset) from value _v_, where / stands for
 //     thw key separator. Whitespace surrounding _k_ or _v_ is ignored.
 
+
+// Actually just remove all the line parsing crud here; have import_k_eq_v for argv items and use streams
+// for import_ini.
+
+
+#if 0
+namespace detail {
+
+struct line_iterator {
+    using size_type = std::string_view::size_type;
+    using difference_type = std::string_view::difference_type;
+    using value_type = std::string_view;
+    using reference = std::string_view;
+    using iterator_tag = std::input_iterator_tag;
+
+    static constexpr size_type npos = std::string_view::npos;
+
+    std::string_view all;
+    size_type b = npos, n = npos;
+
+    line_iterator() = default;
+
+    explicit line_iterator(std::string_view s):
+        all(s), b(0), n(all.find('\n')) {}
+
+    bool operator==(line_iterator other) const {
+        return (b==npos && other.b==npos) || (all.data()==other.all.data() && b==other.b);
+    }
+
+    bool operator!=(line_iterator other) const {
+        return !(*this==other);
+    }
+
+    line_iterator& operator++() {
+        if (b==npos || n==npos || b+n>=all.size()-1) {
+            b = n = npos;
+        }
+        else {
+            b += n+1;
+            n = all.substr(b).find('\n');
+        }
+        return *this;
+    }
+
+    line_iterator operator++(int) {
+        line_iterator keep = *this;
+        ++*this;
+        return keep;
+    }
+
+    std::string_view operator*() const {
+        return all.substr(b, n);
+    }
+};
+
+struct lines {
+    line_iterator b, e;
+
+    explicit lines(std::string_view v):
+        b(line_iterator(v)), e(line_iterator()) {}
+
+    line_iterator begin() const { return b; }
+    line_iterator end() const { return e; }
+};
+
+} // namespace detail
+
 template <typename Record>
-void import_kv_pairs(Record &rec, const specification_set<Record>& specs, std::string_view text, reader<std::string_view> rdr) {
+hopefully<void> import_kv_pairs(
+    Record &rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
+    std::string_view text, std::string fs = "=")
+{
+    constexpr auto npos = std::string_view::npos;
+
+    failure_context ctx;
+
+    for (auto line: detail::lines(text)) {
+        std::string_view key, value;
+        ++ctx.nr;
+
+        if (line.empty()) continue;
+
+        auto eq = line.find('=');
+        if (eq==npos) {
+            key = line;
+            value = "true"; // special case boolean
+        }
+        else {
+            key = line.substr(0, eq);
+            value = line.substr(eq+1);
+        }
+
+        auto sp = specs.get_if(key);
+        if (!sp) {
+            ctx.key = std::string(key);
+            return std::unexpected(unrecognized_key(ctx));
+        }
+
+        if (auto h = sp->read(rec, value, rdr)) continue;
+        else {
+            ctx.key = key;
+            ctx.offset = eq==npos? 0: eq+1;
+            context(h.error()) = ctx;
+            return h;
+        }
+    }
+    return {};
+}
+#endif
+
+template <typename Record>
+hopefully<void> import_k_eq_v(
+    Record &rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
+    std::string_view text, std::string eq_token = "=")
+{
+    constexpr auto npos = std::string_view::npos;
+
+    failure_context ctx;
+    std::string_view key, value;
+
+    if (text.empty()) return {};
+
+    auto eq = text.find(eq_token);
+    if (eq==npos) {
+        key = text;
+        value = "true"; // special case boolean
+    }
+    else {
+        key = text.substr(0, eq);
+        value = text.substr(eq+1);
+    }
+
+    auto sp = specs.get_if(key);
+    if (!sp) {
+        ctx.key = std::string(key);
+        return std::unexpected(unrecognized_key(ctx));
+    }
+
+    auto h = sp->read(rec, value, rdr);
+    if (!h) {
+        ctx.key = key;
+        ctx.cindex = eq==npos? 1: eq+2;
+        context(h.error()) = ctx;
+    }
+
+    return h;
+}
+
+
+template <typename Record>
+hopefully<void> import_k_eq_v(Record &rec, const specification_set<Record>& specs, std::string_view text, std::string eq_token = "=") {
+    return import_kv_pairs(rec, specs, default_reader(), text, eq_token);
 }
 
 } // namespace parapara
