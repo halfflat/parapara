@@ -221,17 +221,17 @@ struct bad_key_set: parapara_error {
 // can be replaced with concepts and requires clauses.
 
 template <typename X, typename = void>
-struct can_charconv: std::false_type {};
+struct can_from_chars: std::false_type {};
 
 template <typename X>
-struct can_charconv<X, std::void_t<decltype(std::from_chars((char *)0, (char *)0, std::declval<X&>()))>>: std::true_type {};
+struct can_from_chars<X, std::void_t<decltype(std::from_chars((char *)0, (char *)0, std::declval<X&>()))>>: std::true_type {};
 
 template <typename X>
-inline constexpr bool can_charconv_v = can_charconv<X>::value;
+inline constexpr bool can_from_chars_v = can_from_chars<X>::value;
 
 // - read a scalar value that is supported by std::from_chars, viz. a standard integer or floating point type.
 
-template <typename T, std::enable_if_t<can_charconv_v<T>, int> = 0>
+template <typename T, std::enable_if_t<can_from_chars_v<T>, int> = 0>
 hopefully<T> read_cc(std::string_view v) {
     T x;
     auto [p, err] = std::from_chars(&v.front(), &v.front()+v.size(), x);
@@ -302,8 +302,75 @@ struct read_dsv {
     }
 };
 
-// III. Reader (and later, writer) classes
-// =======================================
+// write a scalar value that is supported by std::to_chars.
+
+template <typename X, typename = void>
+struct can_to_chars: std::false_type {};
+
+template <typename X>
+struct can_to_chars<X, std::void_t<decltype(std::to_chars((char *)0, (char *)0, std::declval<X&>()))>>: std::true_type {};
+
+template <typename X>
+inline constexpr bool can_to_chars_v = can_to_chars<X>::value;
+
+template <typename T, std::enable_if_t<can_to_chars_v<T>, int> = 0>
+std::string write_cc(const T& v) {
+    std::array<char, std::numeric_limits<T>::max_digits10+10> buf;
+
+    auto [p, err] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
+    if (err==std::errc())
+        return std::string(buf.data(), p);
+    else
+        return "error"; // probably can do better than this for error handling
+}
+
+// - write a string, without any filters (very boring)
+
+inline std::string write_string(const std::string& v) {
+    return v;
+}
+
+// - write a boolean true/false representation, case sensitive
+
+inline std::string write_bool_alpha(bool v) {
+    return v? "true": "false";
+}
+
+// - write a delimitter-separated list of items, without delimiter escapes;
+//   C represents a container type.
+
+template <typename C,
+          std::enable_if_t<has_value_type_v<C>, int> = 0>
+struct write_dsv {
+    using value_type = typename C::value_type;
+    std::function<std::string (const value_type&)> write_field;
+    std::string delim;      // field separator
+
+    explicit write_dsv(std::function<std::string (const value_type&)> write_field, std::string delim=","):
+        write_field(std::move(write_field)), delim(delim) {}
+
+    std::string operator()(const C& fields) const {
+        using std::begin;
+        using std::end;
+
+        auto b = begin(fields);
+        auto e = end(fields);
+
+        if (b==e) return {};
+
+        std::string out = write_field(*b++);
+        while (b!=e) {
+            out += delim;
+            out += write_field(*b++);
+        }
+
+        return out;
+    }
+};
+
+
+// III. Reader and writer classes
+// ==============================
 //
 // A reader object maintains a type-indexed collection of type-specific parsers;
 // the constructor and add method allows readers to be composed and extended with
@@ -331,6 +398,103 @@ inline const T& unbox(const box<T>& box) { return box.value; }
 
 template <typename T>
 inline T unbox(box<T>&& box) { return std::move(box.value); }
+
+// 'any_ptr' type erasure for pointers
+
+struct any_ptr {
+    any_ptr() = default;
+    any_ptr(const any_ptr&) = default;
+
+    any_ptr(std::nullptr_t) {}
+
+    template <typename T>
+    any_ptr(T* ptr):
+        ptr_((void *)ptr), type_ptr_(&typeid(T*)) {}
+
+    const std::type_info& type() const noexcept { return *type_ptr_; }
+
+    bool has_value() const noexcept { return ptr_; }
+    operator bool() const noexcept { return has_value(); }
+
+    void reset() noexcept { ptr_ = nullptr; }
+    void reset(std::nullptr_t) noexcept { ptr_ = nullptr; }
+
+    template <typename T>
+    void reset(T* ptr) noexcept {
+        ptr_ = (void*)ptr;
+        type_ptr_ = &typeid(T*);
+    }
+
+    template <typename T, typename = std::enable_if_t<std::is_pointer<T>::value>>
+    T as() const noexcept {
+        if constexpr (std::is_void_v<std::remove_pointer_t<T>>) return (T)ptr_;
+        else return typeid(T)==type()? (T)ptr_: nullptr;
+    }
+
+    any_ptr& operator=(const any_ptr& other) noexcept {
+        type_ptr_ = other.type_ptr_;
+        ptr_ = other.ptr_;
+        return *this;
+    }
+
+    any_ptr& operator=(std::nullptr_t) noexcept {
+        reset();
+        return *this;
+    }
+
+    template <typename T>
+    any_ptr& operator=(T* ptr) noexcept {
+        reset(ptr);
+        return *this;
+    }
+
+private:
+    void* ptr_ = nullptr;
+    const std::type_info* type_ptr_ = &typeid(void);
+};
+
+template <typename T>
+T any_cast(const any_ptr& p) noexcept { return p.as<T>(); }
+
+// decode argument type of function, member function or functional
+
+template <typename X>
+struct unary_function_arg1 { using type = void; };
+
+template <typename R, typename A>
+struct unary_function_arg1<R (A)> { using type = A; };
+
+template <typename R, typename A>
+struct unary_function_arg1<R (*)(A)> { using type = A; };
+
+template <typename R, typename C, typename A>
+struct unary_function_arg1<R (C::*)(A)> { using type = A; };
+
+template <typename R, typename C, typename A>
+struct unary_function_arg1<R (C::*)(A) const> { using type = A; };
+
+template <typename X, typename = void>
+struct unary_function_arg {
+    using type = typename unary_function_arg1<X>::type;
+};
+
+template <typename X>
+struct unary_function_arg<X, std::void_t<decltype(&X::operator())>> {
+    using type = typename unary_function_arg1<decltype(&X::operator())>::type;
+};
+
+template <typename X>
+using unary_function_arg_t = typename unary_function_arg<X>::type;
+
+// implementation of remove_cvref_t pre C++20:
+
+template <typename X>
+struct remove_cvref {
+    using type = std::remove_cv_t<std::remove_reference_t<X>>;
+};
+
+template <typename X>
+using remove_cvref_t = typename remove_cvref<X>::type;
 
 } // namespace detail
 
@@ -437,9 +601,119 @@ reader<std::string_view> make_default_reader() {
 
 } // namespace detail
 
-
 inline const reader<std::string_view>& default_reader() {
     static reader<std::string_view> s = detail::make_default_reader();
+    return s;
+}
+
+
+template <typename Repn = std::string>
+struct writer {
+    using representation_type = Repn;
+    std::unordered_map<std::type_index, std::function<hopefully<Repn> (detail::any_ptr)>> wmap;
+
+    // typed write to representation
+
+    template <typename T>
+    hopefully<Repn> write(T&& v) const {
+        if (auto i = wmap.find(std::type_index(typeid(detail::remove_cvref_t<T>))); i!=wmap.end()) {
+            const detail::remove_cvref_t<T>* p = &v;
+            return (i->second)(detail::any_ptr(v));
+        }
+        else {
+            return unsupported_type();
+        }
+    }
+
+    // type-erased write from representation
+
+    hopefully<Repn> write(std::type_index ti, detail::any_ptr p) const {
+        // TODO: actually confirm p has same underlying type as ti
+        if (auto i = wmap.find(ti); i!=wmap.end()) {
+            return (i->second)(p);
+        }
+        else {
+            return unsupported_type();
+        }
+    }
+
+    void add() {}
+
+    // add a write function with signature Repn (T&).
+
+    template <typename F,
+              typename... Tail,
+              std::enable_if_t<!std::is_void_v<detail::unary_function_arg_t<F>>, int> = 0
+    >
+    void add(F write, Tail&&... tail) {
+        using A = detail::remove_cvref_t<detail::unary_function_arg_t<F>>;
+
+        wmap[std::type_index(typeid(A))] = [write = std::move(write)](detail::any_ptr p) -> hopefully<Repn> {
+            auto q = detail::any_cast<const A*>(p);
+            if (!q) return unsupported_type(); // or internal error?
+            return write(*q);
+        };
+
+        add(std::forward<Tail>(tail)...);
+    }
+
+    // add write functions from another writer
+
+    template <typename... Tail>
+    void add(const writer& other, Tail&&... tail) {
+        for (const auto& item: other.rmap) {
+            wmap.insert_or_assign(item.first, item.second);
+        }
+        add(std::forward<Tail>(tail)...);
+    }
+
+    writer() = default;
+    writer(const writer&) = default;
+    writer(writer&&) = default;
+
+    // construct a reader from read functions and/or other readers
+
+    template <typename... Fs>
+    explicit writer(Fs&&... fs) {
+        add(std::forward<Fs>(fs)...);
+    }
+};
+
+namespace detail {
+
+writer<std::string> make_default_writer() {
+    return writer<std::string>(
+        write_cc<short>,
+        write_cc<unsigned short>,
+        write_cc<int>,
+        write_cc<unsigned int>,
+        write_cc<long>,
+        write_cc<unsigned long>,
+        write_cc<long long>,
+        write_cc<unsigned long long>,
+        write_cc<float>,
+        write_cc<double>,
+        write_cc<long double>,
+        write_bool_alpha,
+        write_string,
+        write_dsv<std::vector<short>>{write_cc<short>},
+        write_dsv<std::vector<unsigned short>>{write_cc<unsigned short>},
+        write_dsv<std::vector<int>>{write_cc<int>},
+        write_dsv<std::vector<unsigned int>>{write_cc<unsigned int>},
+        write_dsv<std::vector<long>>{write_cc<long>},
+        write_dsv<std::vector<unsigned long>>{write_cc<unsigned long>},
+        write_dsv<std::vector<long long>>{write_cc<long long>},
+        write_dsv<std::vector<unsigned long long>>{write_cc<unsigned long long>},
+        write_dsv<std::vector<float>>{write_cc<float>},
+        write_dsv<std::vector<double>>{write_cc<double>},
+        write_dsv<std::vector<long double>>{write_cc<long double>}
+    );
+}
+
+} // namespace detail
+
+inline const writer<std::string>& default_writer() {
+    static writer<std::string> s = detail::make_default_writer();
     return s;
 }
 
