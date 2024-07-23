@@ -16,12 +16,17 @@ const char* ini_text =
     "\n"
     "   foo = two words  \n"
     "   bar = hash#\n"
-    "   baz = 2.8\n"
+    "   baz = 2.8, 99\n"
     "xy ZZ y = 12\n"
     "\n"
     "[ blurgle ]\n"
     "\n"
-    "   baz\n";
+    "   baz\n"
+    "   quux = 1,3,4\n"
+    "\n"
+    "[ zoinks ]\n"
+    "   zoinks!\n"
+    "\n";
 
 int main(int, char**) {
     struct params {
@@ -30,16 +35,24 @@ int main(int, char**) {
         std::vector<double> baz;
         int xyzzy = -1;
         std::optional<bool> blurgle_baz;
+        std::vector<int> quux;
+        bool zoinks = false;
     } p;
 
     P::reader R = P::default_reader();
 
     P::specification<params> specs[] = {
-        {"foo", &params::foo, P::validator([](auto s) { return s.size()<=10; }, "maximum foo length 10")},
+        {"foo", &params::foo,
+            P::require([](auto s) { return s.size()<=10; }, "maximum foo length 10"),
+            "short name for foo (maximum 10 characters)"},
+        {"baz", &params::baz, "bazziness vector:\n  0-3: not very bazzy\n  3+ : quite bazzy indeed"},
         {"bar", &params::bar},
-        {"baz", &params::baz},
         {"xyzzy", &params::xyzzy},
-        {"blurgle.baz", &params::blurgle_baz}
+        {"blurgle.baz", &params::blurgle_baz, "always blurgle bazzes?"},
+        {"zoinks.zoinks!", &params::zoinks,
+             P::require([](bool x) { return x; }, "zoinks! must be true"),
+             "zoinks!?"},
+        {"blurgle.quux", &params::quux, ""}
     };
 
     P::specification_set specset(specs, parapara::keys_lc_nows);
@@ -51,13 +64,7 @@ int main(int, char**) {
         std::cout << explain(h.error(), true) << "\n";
     }
 
-    std::cout << "foo: \"" << p.foo << "\"\n";
-    std::cout << "bar: \"" << p.bar << "\"\n";
-    std::cout << "baz:";
-    for (auto x: p.baz) std::cout << " " << x;
-    std::cout << "\n";
-    std::cout << "xyzzy: " << p.xyzzy << "\n";
-    std::cout << "blurgle.baz: ";
-    if (p.blurgle_baz.has_value()) std::cout << std::boolalpha << p.blurgle_baz.value() << "\n";
-    else std::cout << "nothing\n";
+    if (auto h = P::export_ini(p, specs, P::default_writer(), std::cout, "."); !h) {
+        std::cout << explain(h.error()) << '\n';
+    }
 }

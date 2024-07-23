@@ -4,6 +4,8 @@
 #include <functional>
 #include <iomanip>
 #include <iterator>
+#include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -67,7 +69,8 @@ struct failure {
         invalid_value,
         unsupported_type,
         unrecognized_key,
-        bad_syntax
+        bad_syntax,
+        empty_optional
     } error = internal_error;
 
     failure_context ctx;
@@ -98,7 +101,12 @@ inline auto unrecognized_key(std::string_view key = {}, failure_context ctx = {}
 }
 
 inline auto bad_syntax(failure_context ctx = {}) {
-    return std::unexpected(failure{failure::unrecognized_key, std::move(ctx), {}});
+    return std::unexpected(failure{failure::bad_syntax, std::move(ctx), {}});
+}
+
+inline auto empty_optional(std::string_view key = {}, failure_context ctx = {}) {
+    if (!key.empty()) ctx.key = std::string(key);
+    return std::unexpected(failure{failure::empty_optional, std::move(ctx), {}});
 }
 
 // manipulate context within failure
@@ -399,7 +407,49 @@ inline const T& unbox(const box<T>& box) { return box.value; }
 template <typename T>
 inline T unbox(box<T>&& box) { return std::move(box.value); }
 
-// 'any_ptr' type erasure for pointers
+// decode argument type of function, member function or functional
+
+template <typename X>
+struct unary_function_arg1 { using type = void; };
+
+template <typename R, typename A>
+struct unary_function_arg1<R (A)> { using type = A; };
+
+template <typename R, typename A>
+struct unary_function_arg1<R (*)(A)> { using type = A; };
+
+template <typename R, typename C, typename A>
+struct unary_function_arg1<R (C::*)(A)> { using type = A; };
+
+template <typename R, typename C, typename A>
+struct unary_function_arg1<R (C::*)(A) const> { using type = A; };
+
+template <typename X, typename = void>
+struct unary_function_arg {
+    using type = typename unary_function_arg1<X>::type;
+};
+
+template <typename X>
+struct unary_function_arg<X, std::void_t<decltype(&X::operator())>> {
+    using type = typename unary_function_arg1<decltype(&X::operator())>::type;
+};
+
+template <typename X>
+using unary_function_arg_t = typename unary_function_arg<X>::type;
+
+// implementation of remove_cvref_t pre C++20:
+
+template <typename X>
+struct remove_cvref {
+    using type = std::remove_cv_t<std::remove_reference_t<X>>;
+};
+
+template <typename X>
+using remove_cvref_t = typename remove_cvref<X>::type;
+
+} // namespace detail
+
+// 'any_ptr' type erasure for pointers; (should this live in detail namespace?)
 
 struct any_ptr {
     any_ptr() = default;
@@ -456,47 +506,6 @@ private:
 template <typename T>
 T any_cast(const any_ptr& p) noexcept { return p.as<T>(); }
 
-// decode argument type of function, member function or functional
-
-template <typename X>
-struct unary_function_arg1 { using type = void; };
-
-template <typename R, typename A>
-struct unary_function_arg1<R (A)> { using type = A; };
-
-template <typename R, typename A>
-struct unary_function_arg1<R (*)(A)> { using type = A; };
-
-template <typename R, typename C, typename A>
-struct unary_function_arg1<R (C::*)(A)> { using type = A; };
-
-template <typename R, typename C, typename A>
-struct unary_function_arg1<R (C::*)(A) const> { using type = A; };
-
-template <typename X, typename = void>
-struct unary_function_arg {
-    using type = typename unary_function_arg1<X>::type;
-};
-
-template <typename X>
-struct unary_function_arg<X, std::void_t<decltype(&X::operator())>> {
-    using type = typename unary_function_arg1<decltype(&X::operator())>::type;
-};
-
-template <typename X>
-using unary_function_arg_t = typename unary_function_arg<X>::type;
-
-// implementation of remove_cvref_t pre C++20:
-
-template <typename X>
-struct remove_cvref {
-    using type = std::remove_cv_t<std::remove_reference_t<X>>;
-};
-
-template <typename X>
-using remove_cvref_t = typename remove_cvref<X>::type;
-
-} // namespace detail
 
 template <typename Repn = std::string_view>
 struct reader {
@@ -610,7 +619,7 @@ inline const reader<std::string_view>& default_reader() {
 template <typename Repn = std::string>
 struct writer {
     using representation_type = Repn;
-    std::unordered_map<std::type_index, std::function<hopefully<Repn> (detail::any_ptr)>> wmap;
+    std::unordered_map<std::type_index, std::function<hopefully<Repn> (any_ptr)>> wmap;
 
     // typed write to representation
 
@@ -618,7 +627,7 @@ struct writer {
     hopefully<Repn> write(T&& v) const {
         if (auto i = wmap.find(std::type_index(typeid(detail::remove_cvref_t<T>))); i!=wmap.end()) {
             const detail::remove_cvref_t<T>* p = &v;
-            return (i->second)(detail::any_ptr(v));
+            return (i->second)(any_ptr(v));
         }
         else {
             return unsupported_type();
@@ -627,7 +636,7 @@ struct writer {
 
     // type-erased write from representation
 
-    hopefully<Repn> write(std::type_index ti, detail::any_ptr p) const {
+    hopefully<Repn> write(std::type_index ti, any_ptr p) const {
         // TODO: actually confirm p has same underlying type as ti
         if (auto i = wmap.find(ti); i!=wmap.end()) {
             return (i->second)(p);
@@ -648,8 +657,8 @@ struct writer {
     void add(F write, Tail&&... tail) {
         using A = detail::remove_cvref_t<detail::unary_function_arg_t<F>>;
 
-        wmap[std::type_index(typeid(A))] = [write = std::move(write)](detail::any_ptr p) -> hopefully<Repn> {
-            auto q = detail::any_cast<const A*>(p);
+        wmap[std::type_index(typeid(A))] = [write = std::move(write)](any_ptr p) -> hopefully<Repn> {
+            auto q = any_cast<const A*>(p);
             if (!q) return unsupported_type(); // or internal error?
             return write(*q);
         };
@@ -736,10 +745,16 @@ inline constexpr bool validates_parameter_v = validates_parameter<V, U>::value;
 namespace detail {
     template <typename X> struct base_field { using type = X; };
     template <typename X> struct base_field<std::optional<X>> { using type = X; };
+
+    template <typename X> struct is_optional_: std::false_type {};
+    template <typename X> struct is_optional_<std::optional<X>>: std::true_type {};
 }
 
 template <typename X>
 using base_field_t = typename detail::base_field<std::remove_cv_t<X>>::type;
+
+template <typename X>
+constexpr bool is_optional_v = detail::is_optional_<std::remove_cv_t<X>>::value;
 
 template <typename Record>
 struct specification {
@@ -760,6 +775,16 @@ struct specification {
                 if (!fptr) return internal_error();
 
                 return static_cast<hopefully<Field>>(validate(*fptr)).transform([&record, field_ptr](auto x) { record.*field_ptr = std::move(x); });
+            }),
+        retrieve_impl_(
+            [field_ptr = field_ptr] (const Record& record) -> any_ptr {
+                using B = base_field_t<Field>;
+                if constexpr (is_optional_v<Field>) {
+                    return static_cast<const B*>(record.*field_ptr? &((record.*field_ptr).value()): 0);
+                }
+                else {
+                    return static_cast<const B*>(&(record.*field_ptr));
+                }
             })
     {}
 
@@ -769,18 +794,32 @@ struct specification {
     {}
 
     template <typename Reader = reader<std::string_view>>
-    hopefully<void> read(Record& record, typename Reader::representation_type repn, const Reader rdr = default_reader()) const {
+    hopefully<void> read(Record& record, typename Reader::representation_type repn, const Reader& rdr = default_reader()) const {
         return rdr.read(field_type, repn).
             and_then([this, &record](auto a) { return assign(record, std::move(a)); }).
             transform_error(with_ctx_key(key));
+    }
+
+    template <typename Writer = writer<std::string>>
+    hopefully<typename Writer::representation_type> write(Record& record, const Writer& wtr = default_writer()) const {
+        return retrieve(record).
+               and_then([&](const any_ptr& p) { return wtr.write(field_type, p); }).
+               transform_error(with_ctx_key(key));
     }
 
     hopefully<void> assign(Record& record, std::any value) const {
         return assign_impl_(record, value).transform_error(with_ctx_key(key));
     }
 
+    hopefully<any_ptr> retrieve(const Record& record) const {
+        any_ptr p = retrieve_impl_(record);
+        if (p) return p;
+        else return empty_optional(key);
+    }
+
 private:
     std::function<hopefully<void> (Record &, std::any)> assign_impl_;
+    std::function<any_ptr (const Record &)> retrieve_impl_;
 };
 
 // key canonicalization
@@ -846,8 +885,14 @@ struct specification_set {
     }
 
     template <typename Reader>
-    hopefully<void> read(Record& record, std::string_view key, typename Reader::representation_type repn, const Reader rdr) const {
+    hopefully<void> read(Record& record, std::string_view key, typename Reader::representation_type repn, const Reader& rdr) const {
         if (auto specp = get_if(key)) return specp->read(record, repn, rdr);
+        else return unrecognized_key(key);
+    }
+
+    template <typename Writer>
+    hopefully<typename Writer::representation_type> write(Record& record, std::string_view key, const Writer& wtr) const {
+        if (auto specp = get_if(key)) return specp->write(record, wtr);
         else return unrecognized_key(key);
     }
 
@@ -1049,6 +1094,63 @@ hopefully<void> import_ini(
 
         if (!h) return h;
 
+    }
+
+    return {};
+}
+
+// INI-style exporter.
+// Second argument is any array or collection (with value_type defined) of specifications.
+
+template <typename Record,
+          typename C,
+          std::enable_if_t<std::is_assignable_v<specification<Record>&, value_type_t<C>>, int> = 0
+>
+hopefully<void> export_ini(
+    Record& record, const C& specs, const writer<std::string>& wtr,
+    std::ostream& out, std::string secsep = "/")
+{
+    constexpr auto npos = std::string::npos;
+    std::map<std::string, std::stringstream> section_content;
+
+    for (const auto& spec: specs) {
+        std::string section;
+        std::string_view key(spec.key);
+
+        if (auto j = key.find(secsep); j!=npos) {
+            section = key.substr(0, j);
+            key.remove_prefix(j+1);
+        }
+
+        std::stringstream& content = section_content[section];
+        if (content.tellp()) content << '\n';
+
+        std::string_view desc(spec.description);
+        while (!desc.empty()) {
+            auto h = desc.find('\n');
+            content << "# " << desc.substr(0, h) << '\n';
+            desc.remove_prefix(h==npos? desc.size(): h+1);
+        }
+
+        if (auto hs = spec.write(record, wtr)) {
+            content << key << " = " << hs.value() << '\n';
+        }
+        else if (hs.error().error == failure::empty_optional) {
+            content << "# " << key << " =\n";
+        }
+        else {
+            return std::unexpected(hs.error());
+        }
+    }
+
+    if (section_content.count("")) {
+        out << section_content[""].rdbuf() << '\n';
+    }
+
+    for (const auto& [section, content]: section_content) {
+        if (section.empty()) continue;
+
+        out << '[' << section << "]\n\n" << content.rdbuf() << '\n';
     }
 
     return {};
