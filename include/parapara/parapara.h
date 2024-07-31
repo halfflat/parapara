@@ -1,9 +1,11 @@
 #pragma once
 #include <any>
+#include <charconv>
 #include <expected>
 #include <functional>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -579,7 +581,7 @@ namespace detail {
 // default reader uses charconv for numeric scalars, simple string reader,
 // true/false boolean read, and comma-delimmited reader for numeric vectors.
 
-reader<std::string_view> make_default_reader() {
+inline reader<std::string_view> make_default_reader() {
     return reader<std::string_view>(
         read_cc<short>,
         read_cc<unsigned short>,
@@ -670,7 +672,7 @@ struct writer {
 
     template <typename... Tail>
     void add(const writer& other, Tail&&... tail) {
-        for (const auto& item: other.rmap) {
+        for (const auto& item: other.wmap) {
             wmap.insert_or_assign(item.first, item.second);
         }
         add(std::forward<Tail>(tail)...);
@@ -690,7 +692,7 @@ struct writer {
 
 namespace detail {
 
-writer<std::string> make_default_writer() {
+inline writer<std::string> make_default_writer() {
     return writer<std::string>(
         write_cc<short>,
         write_cc<unsigned short>,
@@ -801,7 +803,7 @@ struct specification {
     }
 
     template <typename Writer = writer<std::string>>
-    hopefully<typename Writer::representation_type> write(Record& record, const Writer& wtr = default_writer()) const {
+    hopefully<typename Writer::representation_type> write(const Record& record, const Writer& wtr = default_writer()) const {
         return retrieve(record).
                and_then([&](const any_ptr& p) { return wtr.write(field_type, p); }).
                transform_error(with_ctx_key(key));
@@ -824,13 +826,13 @@ private:
 
 // key canonicalization
 
-std::string keys_lc(std::string_view v) {
+inline std::string keys_lc(std::string_view v) {
     std::string out;
     for (char c: v) out.push_back(std::tolower(c));
     return out;
 }
 
-std::string keys_lc_nows(std::string_view v) {
+inline std::string keys_lc_nows(std::string_view v) {
     std::string out;
     for (char c: v) {
         if (isspace(c)) continue;
@@ -1107,7 +1109,7 @@ template <typename Record,
           std::enable_if_t<std::is_assignable_v<specification<Record>&, value_type_t<C>>, int> = 0
 >
 hopefully<void> export_ini(
-    Record& record, const C& specs, const writer<std::string>& wtr,
+    const Record& record, const C& specs, const writer<std::string>& wtr,
     std::ostream& out, std::string secsep = "/")
 {
     constexpr auto npos = std::string::npos;
