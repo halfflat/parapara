@@ -1,7 +1,6 @@
 #pragma once
 #include <any>
 #include <charconv>
-#include <expected>
 #include <functional>
 #include <iomanip>
 #include <iterator>
@@ -16,9 +15,21 @@
 #include <variant>
 #include <vector>
 
+#if __cplusplus >=202002L
+#include <version>
+#endif
+
+#if __cplusplus >=202302L && defined(__cpp_lib_expected) && __cpp_lib_expected>=202211L
+#include <expected>
+#else
+#include <parapara/expected.h>
+#endif
+
 namespace parapara {
 
 // Header organization:
+//
+// Preamble: Helper classes, importing backported expected class
 //
 // Section I: Failure handling and exceptions
 //
@@ -31,6 +42,37 @@ namespace parapara {
 // Section V: Validation helpers
 //
 // Section VI: Importers and exporters
+
+// Preamble
+// --------
+
+// Import std::expected and friends, or backported version in expected.h.
+
+#if __cplusplus >=202302L && defined(__cpp_lib_expected) && __cpp_lib_expected>=202211L
+
+using std::expected;
+using std::unexpected;
+using std::unexpect;
+using std::unexpect_t;
+
+#else
+
+using backport::expected;
+using backport::unexpected;
+using backport::unexpect;
+using backport::unexpect_t;
+
+#endif
+
+// Define our own remove_cvref_t for C++17 builds.
+
+template <typename X>
+struct remove_cvref {
+    using type = std::remove_cv_t<std::remove_reference_t<X>>;
+};
+
+template <typename X>
+using remove_cvref_t = typename remove_cvref<X>::type;
 
 
 // I. Failure handling and exceptions
@@ -82,33 +124,33 @@ struct failure {
 // helpers for generating failure values
 
 inline auto internal_error(failure_context ctx = {}) {
-    return std::unexpected(failure{failure::internal_error, std::move(ctx), {}});
+    return unexpected(failure{failure::internal_error, std::move(ctx), {}});
 }
 
 inline auto read_failure(failure_context ctx = {}) {
-    return std::unexpected(failure{failure::read_failure, std::move(ctx), {}});
+    return unexpected(failure{failure::read_failure, std::move(ctx), {}});
 }
 
 inline auto invalid_value(std::string constraint = {}, failure_context ctx = {}) {
-    return std::unexpected(failure{failure::invalid_value, std::move(ctx), std::any{constraint}});
+    return unexpected(failure{failure::invalid_value, std::move(ctx), std::any{constraint}});
 }
 
 inline auto unsupported_type(failure_context ctx = {}) {
-    return std::unexpected(failure{failure::unsupported_type, std::move(ctx), {}});
+    return unexpected(failure{failure::unsupported_type, std::move(ctx), {}});
 }
 
 inline auto unrecognized_key(std::string_view key = {}, failure_context ctx = {}) {
     if (!key.empty()) ctx.key = std::string(key);
-    return std::unexpected(failure{failure::unrecognized_key, std::move(ctx), {}});
+    return unexpected(failure{failure::unrecognized_key, std::move(ctx), {}});
 }
 
 inline auto bad_syntax(failure_context ctx = {}) {
-    return std::unexpected(failure{failure::bad_syntax, std::move(ctx), {}});
+    return unexpected(failure{failure::bad_syntax, std::move(ctx), {}});
 }
 
 inline auto empty_optional(std::string_view key = {}, failure_context ctx = {}) {
     if (!key.empty()) ctx.key = std::string(key);
-    return std::unexpected(failure{failure::empty_optional, std::move(ctx), {}});
+    return unexpected(failure{failure::empty_optional, std::move(ctx), {}});
 }
 
 // manipulate context within failure
@@ -194,11 +236,11 @@ inline std::string explain(const failure& f, bool long_format = false) {
 // hopefully<T> is the expected alias used for representing results
 // from parapara routines that can encode the above failure conditions.
 //
-// std::expected is the underlying class template until a C++17 or C++20
+// expected is the underlying class template until a C++17 or C++20
 // work-alike is complete.
 
 template <typename T>
-using hopefully = std::expected<T, failure>;
+using hopefully = expected<T, failure>;
 
 template <typename T>
 struct is_hopefully: std::false_type {};
@@ -304,7 +346,7 @@ struct read_dsv {
                 else break;
             }
             else {
-                return std::unexpected(std::move(hf.error()));
+                return unexpected(std::move(hf.error()));
             }
         }
 
@@ -438,16 +480,6 @@ struct unary_function_arg<X, std::void_t<decltype(&X::operator())>> {
 
 template <typename X>
 using unary_function_arg_t = typename unary_function_arg<X>::type;
-
-// implementation of remove_cvref_t pre C++20:
-
-template <typename X>
-struct remove_cvref {
-    using type = std::remove_cv_t<std::remove_reference_t<X>>;
-};
-
-template <typename X>
-using remove_cvref_t = typename remove_cvref<X>::type;
 
 } // namespace detail
 
@@ -627,8 +659,8 @@ struct writer {
 
     template <typename T>
     hopefully<Repn> write(T&& v) const {
-        if (auto i = wmap.find(std::type_index(typeid(detail::remove_cvref_t<T>))); i!=wmap.end()) {
-            const detail::remove_cvref_t<T>* p = &v;
+        if (auto i = wmap.find(std::type_index(typeid(remove_cvref_t<T>))); i!=wmap.end()) {
+            const remove_cvref_t<T>* p = &v;
             return (i->second)(any_ptr(v));
         }
         else {
@@ -657,7 +689,7 @@ struct writer {
               std::enable_if_t<!std::is_void_v<detail::unary_function_arg_t<F>>, int> = 0
     >
     void add(F write, Tail&&... tail) {
-        using A = detail::remove_cvref_t<detail::unary_function_arg_t<F>>;
+        using A = remove_cvref_t<detail::unary_function_arg_t<F>>;
 
         wmap[std::type_index(typeid(A))] = [write = std::move(write)](any_ptr p) -> hopefully<Repn> {
             auto q = any_cast<const A*>(p);
@@ -1141,7 +1173,7 @@ hopefully<void> export_ini(
             content << "# " << key << " =\n";
         }
         else {
-            return std::unexpected(hs.error());
+            return unexpected(hs.error());
         }
     }
 

@@ -19,9 +19,7 @@ gtest-src:=$(gtest-top)/src/gtest-all.cc
 vpath %.cc $(top)test
 vpath %.cc $(top)ex
 
-# In the short term use C++23 for std::expected.
-#CXXSTD?=c++17
-CXXSTD?=c++23
+CXXSTD?=c++17
 #OPTFLAGS?=-O2 -fsanitize=address -march=native
 OPTFLAGS?=-march=native
 CXXFLAGS+=$(OPTFLAGS) -MMD -MP -std=$(CXXSTD) -pedantic -Wall -Wextra -g -pthread
