@@ -1,0 +1,81 @@
+# Things to do / wishlist
+
+## High priority
+
+### Unit testing and documentation
+
+When API is a little less volatile.
+
+Also: should we copy in the backport::exception unit tests?
+
+### Self-referencing readers/writers
+
+Pass reader object to reader functions (similarly, writers) so that
+a reader function for a compound type can use the already-defined
+reader functions for its components.
+
+### Expant library of supplied read/write functions
+
+In particular, keywords representing a fixed set of values/enums;
+explicitly or implicitly keyed sum types; pairs and tuples.
+
+### Explicit handling of optional<X> fields
+
+Semantics for these fields is currently baked in. Is it better
+to treat them as regular values and delegate the representation
+responsibility to readers and writers?
+
+There is currently no way to e.g. represent a field value of
+std::nullopt for such a field. For example, being able to
+have a parameter set by 'foo = default' or 'foo = nothing'
+may be desirable.
+
+Perhaps some sort of fall-back process? i.e. use a specific
+optional<X> read function if present.
+
+### Validating record values
+
+Given a collection of specification objects or a specficiation_set
+for a particular record type, the top-level validate function
+would return a vector of failure (invalid_value) values, one for
+each field a record which fails its validation.
+
+Involves a bit of rework on the specification class definition.
+
+## Medium priority
+
+### Other representations
+
+Have at least a demo if not a supported implementation of using
+JSON objects (e.g. from nlohmann/json) as the external representation
+type, as opposed to std::string_view and std::string.
+
+### Locale-aware vs locale-agnostic readers/writers
+
+Currently, deliberately using charconv for numeric represenations
+to avoid any locale dependencies and to get some round-trip gurarantees.
+Compare though with tinyopt, which deliberarely uses std::iostream
+formatted read/writes to reflect the user environment locale.
+
+Could supply a set of readers/writers based on these too, optionally
+with an explicit locale, giving applications an easy choice between
+the two.
+
+## Low priority
+
+### Wide character support
+
+This is also technically an 'other representation'.
+
+Guessing that this would be useful for Windows environments and
+another other contexts where UCS-2 or UCS-4 representations might
+be used. Take the current std::sting_view/std::string represenations
+and substitute std::basic_string_view/std::basic_string, propagating
+CharT and Traits?
+
+### Closer integration with tinyopt
+
+Maybe make a version of tinyopt that is also based around readers,
+writers, and validators?
+
+
