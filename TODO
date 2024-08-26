@@ -8,11 +8,20 @@ When API is a little less volatile.
 
 Also: should we copy in the backport::exception unit tests?
 
+### Allow supplied writer helper functions to fail
+
+If something like write_cc fails, it should report that
+failure as an error return in a hopefully<std::string>.
+
 ### Self-referencing readers/writers
 
 Pass reader object to reader functions (similarly, writers) so that
 a reader function for a compound type can use the already-defined
 reader functions for its components.
+
+Also: while implementing this, the type traits shenanigans for
+deducing argument types is getting a bit out of control. Tidy this
+up!
 
 ### Expand library of supplied read/write functions
 
