@@ -668,7 +668,7 @@ struct writer {
         }
     }
 
-    // type-erased write from representation
+    // type-erased write to representation
 
     hopefully<Repn> write(std::type_index ti, any_ptr p) const {
         // TODO: actually confirm p has same underlying type as ti
@@ -765,6 +765,10 @@ inline const writer<std::string>& default_writer() {
 
 // Note that validators given to a specification do not need to be of type
 // parapara::validator<X> for some X.
+//
+// Validators, as currently implemented, can transform the value they are
+// given. This is to support use cases where a read value might, for example,
+// be canonicalized or clipped to a range. But it might not be a great idea.
 
 template <typename V, typename U, typename = void>
 struct validates_parameter: std::false_type {};
@@ -803,12 +807,16 @@ struct specification {
         description(description),
         field_type(std::type_index(typeid(base_field_t<Field>))),
         assign_impl_(
-            [&key, field_ptr = field_ptr, validate = std::move(validate)] (Record& record, std::any value) -> hopefully<void>
+            [this, field_ptr = field_ptr] (Record& record, std::any value) -> hopefully<void>
             {
-                const auto fptr = std::any_cast<base_field_t<Field>>(&value);
-                if (!fptr) return internal_error();
-
-                return static_cast<hopefully<Field>>(validate(*fptr)).transform([&record, field_ptr](auto x) { record.*field_ptr = std::move(x); });
+                using B = base_field_t<Field>;
+                if (const B* value_ptr = std::any_cast<B>(&value)) {
+                    return validate_impl_(value_ptr).transform(
+                        [&record, field_ptr](std::any x) { record.*field_ptr = std::any_cast<B>(std::move(x)); });
+                }
+                else {
+                    return internal_error();
+                }
             }),
         retrieve_impl_(
             [field_ptr = field_ptr] (const Record& record) -> any_ptr {
@@ -818,6 +826,17 @@ struct specification {
                 }
                 else {
                     return static_cast<const B*>(&(record.*field_ptr));
+                }
+            }),
+        validate_impl_(
+            [validate = std::move(validate)] (any_ptr ptr) -> hopefully<std::any> {
+                using B = base_field_t<Field>;
+                if (const auto value_ptr = ptr.as<const B*>()) {
+                    return static_cast<hopefully<B>>(validate(*value_ptr)).transform([](B x) { return std::any(std::move(x)); });
+                }
+                else {
+                    if constexpr (is_optional_v<Field>) return hopefully<std::any>{std::in_place, Field{}};
+                    else return internal_error();
                 }
             })
     {}
@@ -851,9 +870,14 @@ struct specification {
         else return empty_optional(key);
     }
 
+    hopefully<std::any> validate(const Record& record) const {
+        return validate_impl_(retrieve_impl_(record)).transform_error(with_ctx_key(key));
+    }
+
 private:
     std::function<hopefully<void> (Record &, std::any)> assign_impl_;
     std::function<any_ptr (const Record &)> retrieve_impl_;
+    std::function<hopefully<std::any> (any_ptr)> validate_impl_;
 };
 
 // key canonicalization
@@ -881,6 +905,20 @@ struct value_type<X [N]> { using type = X; };
 
 template <typename X>
 using value_type_t = typename value_type<std::remove_reference_t<X>>::type;
+
+// The validate function uses the validate methods in a colleciton of specifications to check
+// the values in a record object.
+
+template <typename Record,
+          typename C,
+          std::enable_if_t<std::is_assignable_v<specification<Record>&, value_type_t<C>>, int> = 0>
+std::vector<failure> validate(const Record& record, const C& specs) {
+    std::vector<failure> failures;
+    for (const auto& spec: specs) {
+        if (auto h = spec.validate(record); !h) failures.push_back(std::move(h.error()));
+    }
+    return failures;
+}
 
 // Specification sets comprise a collection of specifications over the same record type with unique keys
 // which optionally are first transformed into a canonical form by a supplied canonicalizer.
@@ -925,9 +963,18 @@ struct specification_set {
     }
 
     template <typename Writer>
-    hopefully<typename Writer::representation_type> write(Record& record, std::string_view key, const Writer& wtr) const {
+    hopefully<typename Writer::representation_type> write(const Record& record, std::string_view key, const Writer& wtr) const {
         if (auto specp = get_if(key)) return specp->write(record, wtr);
         else return unrecognized_key(key);
+    }
+
+    // Can also do the validation operation above from a specification_set.
+    std::vector<failure> validate(const Record& record) const {
+        std::vector<failure> failures;
+        for (const auto& [_, spec]: set_) {
+            if (auto h = spec.validate(record); !h) failures.push_back(std::move(h.error()));
+        }
+        return failures;
     }
 
 private:
@@ -940,6 +987,7 @@ specification_set(X&) -> specification_set<typename value_type_t<X>::record_type
 
 template <typename X>
 specification_set(X&, std::function<std::string (std::string_view)>) -> specification_set<typename value_type_t<X>::record_type>;
+
 
 // V. Validation helpers
 // =====================

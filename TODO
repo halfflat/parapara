@@ -14,7 +14,7 @@ Pass reader object to reader functions (similarly, writers) so that
 a reader function for a compound type can use the already-defined
 reader functions for its components.
 
-### Expant library of supplied read/write functions
+### Expand library of supplied read/write functions
 
 In particular, keywords representing a fixed set of values/enums;
 explicitly or implicitly keyed sum types; pairs and tuples.
@@ -41,6 +41,16 @@ would return a vector of failure (invalid_value) values, one for
 each field a record which fails its validation.
 
 Involves a bit of rework on the specification class definition.
+
+Update: this is done, or at least done-ish.
+
+### Allow validators that modify the value?
+
+Currently they are accommodated, but there are no helper functions for
+constructing them. Should they be permitted? If so, document
+and provide support and helper functions for them. If not,
+remove support and consequently simplify the specification class
+and API.
 
 ## Medium priority
 
