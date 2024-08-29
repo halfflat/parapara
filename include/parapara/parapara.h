@@ -33,9 +33,9 @@ namespace parapara {
 //
 // Section I: Failure handling and exceptions
 //
-// Section II: Reader and writer helpers
+// Section II: Reader and writer classes
 //
-// Section III: Reader and writer classes, defaults
+// Section III: Reader and writer helper functions, default reader and writer
 //
 // Section IV: Parameter specifications, parameter sets
 //
@@ -266,162 +266,7 @@ struct bad_key_set: parapara_error {
     std::string key; // offending key, if any, that caused a key collision.
 };
 
-// II. Reader/writer utilities
-// ===========================
-
-// If C++20 is targetted instead of C++17, these ad hoc type traits and std::enable_if guards
-// can be replaced with concepts and requires clauses.
-
-template <typename X, typename = void>
-struct can_from_chars: std::false_type {};
-
-template <typename X>
-struct can_from_chars<X, std::void_t<decltype(std::from_chars((char *)0, (char *)0, std::declval<X&>()))>>: std::true_type {};
-
-template <typename X>
-inline constexpr bool can_from_chars_v = can_from_chars<X>::value;
-
-// - read a scalar value that is supported by std::from_chars, viz. a standard integer or floating point type.
-
-template <typename T, std::enable_if_t<can_from_chars_v<T>, int> = 0>
-hopefully<T> read_cc(std::string_view v) {
-    T x;
-    auto [p, err] = std::from_chars(&v.front(), &v.front()+v.size(), x);
-
-    if (err==std::errc::result_out_of_range) return invalid_value();
-    if (err!=std::errc() || p!=&v.front()+v.size()) return read_failure();
-    return x;
-}
-
-// - read a string, without any filters
-
-inline hopefully<std::string> read_string(std::string_view v) {
-    return std::string(v);
-}
-
-// - read a boolean true/false representation, case sensitive
-
-inline hopefully<bool> read_bool_alpha(std::string_view v) {
-    if (v=="true") return true;
-    else if (v=="false") return false;
-    else return read_failure();
-}
-
-// - read a delimitter-separated list of items, without delimiter escapes;
-//   C represents a container type, constructible from an iterator range.
-
-template <typename X, typename = void>
-struct has_value_type: std::false_type {};
-
-template <typename X>
-struct has_value_type<X, std::void_t<typename X::value_type>>: std::true_type {};
-
-template <typename X>
-inline constexpr bool has_value_type_v = has_value_type<X>::value;
-
-template <typename C,
-          std::enable_if_t<has_value_type_v<C>, int> = 0,
-          std::enable_if_t<std::is_constructible_v<C, const typename C::value_type*, const typename C::value_type*>, int> = 0>
-struct read_dsv {
-    using value_type = typename C::value_type;
-    std::function<hopefully<value_type> (std::string_view)> read_field;
-    std::string delim;      // field separator
-    const bool skip_ws;     // if true, skip leading space/tabs in each field
-
-    explicit read_dsv(std::function<hopefully<value_type> (std::string_view)> read_field, std::string delim=",", bool skip_ws = true):
-        read_field(std::move(read_field)), delim(delim), skip_ws(skip_ws) {}
-
-    hopefully<C> operator()(std::string_view v) const {
-        constexpr auto npos = std::string_view::npos;
-        std::vector<value_type> fields;
-        while (!v.empty()) {
-            if (skip_ws) {
-                auto ns = v.find_first_not_of(" \t");
-                if (ns!=npos) v.remove_prefix(ns);
-            }
-            auto d = v.find(delim);
-            if (auto hf = read_field(v.substr(0, d))) {
-                fields.push_back(std::move(hf.value()));
-                if (d!=npos) v.remove_prefix(d+1);
-                else break;
-            }
-            else {
-                return unexpected(std::move(hf.error()));
-            }
-        }
-
-        return v.empty()? C{}: C{&fields.front(), &fields.front()+fields.size()};
-    }
-};
-
-// write a scalar value that is supported by std::to_chars.
-
-template <typename X, typename = void>
-struct can_to_chars: std::false_type {};
-
-template <typename X>
-struct can_to_chars<X, std::void_t<decltype(std::to_chars((char *)0, (char *)0, std::declval<X&>()))>>: std::true_type {};
-
-template <typename X>
-inline constexpr bool can_to_chars_v = can_to_chars<X>::value;
-
-template <typename T, std::enable_if_t<can_to_chars_v<T>, int> = 0>
-std::string write_cc(const T& v) {
-    std::array<char, std::numeric_limits<T>::max_digits10+10> buf;
-
-    auto [p, err] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
-    if (err==std::errc())
-        return std::string(buf.data(), p);
-    else
-        return "error"; // probably can do better than this for error handling
-}
-
-// - write a string, without any filters (very boring)
-
-inline std::string write_string(const std::string& v) {
-    return v;
-}
-
-// - write a boolean true/false representation, case sensitive
-
-inline std::string write_bool_alpha(bool v) {
-    return v? "true": "false";
-}
-
-// - write a delimitter-separated list of items, without delimiter escapes;
-//   C represents a container type.
-
-template <typename C,
-          std::enable_if_t<has_value_type_v<C>, int> = 0>
-struct write_dsv {
-    using value_type = typename C::value_type;
-    std::function<std::string (const value_type&)> write_field;
-    std::string delim;      // field separator
-
-    explicit write_dsv(std::function<std::string (const value_type&)> write_field, std::string delim=","):
-        write_field(std::move(write_field)), delim(delim) {}
-
-    std::string operator()(const C& fields) const {
-        using std::begin;
-        using std::end;
-
-        auto b = begin(fields);
-        auto e = end(fields);
-
-        if (b==e) return {};
-
-        std::string out = write_field(*b++);
-        while (b!=e) {
-            out += delim;
-            out += write_field(*b++);
-        }
-
-        return out;
-    }
-};
-
-
-// III. Reader and writer classes
+// II. Reader and writer classes
 // ==============================
 //
 // A reader object maintains a type-indexed collection of type-specific parsers;
@@ -451,37 +296,81 @@ inline const T& unbox(const box<T>& box) { return box.value; }
 template <typename T>
 inline T unbox(box<T>&& box) { return std::move(box.value); }
 
-// decode argument type of function, member function or functional
+// decode argument and return types of function, member function or functional
 
-template <typename X>
-struct unary_function_arg1 { using type = void; };
+template <typename... Ts>
+struct typelist {
+    static constexpr std::size_t length = sizeof...(Ts);
+    template <std::size_t>
+    using arg_t = void;
+};
 
-template <typename R, typename A>
-struct unary_function_arg1<R (A)> { using type = A; };
+template <typename H, typename... Ts>
+struct typelist<H, Ts...> {
+    static constexpr std::size_t length = 1+sizeof...(Ts);
+    template <std::size_t i>
+    using arg_t = std::conditional_t<i==0, H, typename typelist<Ts...>::template arg_t<i-1>>;
+};
 
-template <typename R, typename A>
-struct unary_function_arg1<R (*)(A)> { using type = A; };
+template <typename F>
+struct arglist_impl;
 
-template <typename R, typename C, typename A>
-struct unary_function_arg1<R (C::*)(A)> { using type = A; };
+template <typename R, typename... As>
+struct arglist_impl<R (As...)> { using type = typelist<As...>; };
 
-template <typename R, typename C, typename A>
-struct unary_function_arg1<R (C::*)(A) const> { using type = A; };
+template <typename R, typename... As>
+struct arglist_impl<R (*)(As...)> { using type = typelist<As...>; };
+
+template <typename C, typename R, typename... As>
+struct arglist_impl<R (C::*)(As...)> { using type = typelist<As...>; };
+
+template <typename C, typename R, typename... As>
+struct arglist_impl<R (C::*)(As...) const> { using type = typelist<As...>; };
 
 template <typename X, typename = void>
-struct unary_function_arg {
-    using type = typename unary_function_arg1<X>::type;
-};
+struct arglist { using type = typename arglist_impl<X>::type; };
 
 template <typename X>
-struct unary_function_arg<X, std::void_t<decltype(&X::operator())>> {
-    using type = typename unary_function_arg1<decltype(&X::operator())>::type;
+struct arglist<X, std::void_t<decltype(&X::operator())>> {
+    using type = typename arglist_impl<decltype(&X::operator())>::type;
 };
 
-template <typename X>
-using unary_function_arg_t = typename unary_function_arg<X>::type;
+template <typename F>
+struct return_value_impl;
+
+template <typename R, typename... As>
+struct return_value_impl<R (As...)> { using type = R; };
+
+template <typename R, typename... As>
+struct return_value_impl<R (*)(As...)> { using type = R; };
+
+template <typename C, typename R, typename... As>
+struct return_value_impl<R (C::*)(As...)> { using type = R; };
+
+template <typename C, typename R, typename... As>
+struct return_value_impl<R (C::*)(As...) const> { using type = R; };
 
 } // namespace detail
+
+template <typename X>
+inline constexpr std::size_t n_args = detail::arglist<X>::type::length;
+
+template <std::size_t n, typename X>
+struct nth_argument { using type = typename detail::arglist<X>::type::template arg_t<n>; };
+
+template <std::size_t n, typename X>
+using nth_argument_t = typename nth_argument<n, X>::type;
+
+template <typename X, typename = void>
+struct return_value { using type = typename detail::return_value_impl<X>::type; };
+
+template <typename X>
+struct return_value<X, std::void_t<decltype(&X::operator())>> {
+    using type = typename detail::return_value_impl<decltype(&X::operator())>::type;
+};
+
+template <typename X>
+using return_value_t = typename return_value<X>::type;
 
 // 'any_ptr' type erasure for pointers; (should this live in detail namespace?)
 
@@ -544,14 +433,14 @@ T any_cast(const any_ptr& p) noexcept { return p.as<T>(); }
 template <typename Repn = std::string_view>
 struct reader {
     using representation_type = Repn;
-    std::unordered_map<std::type_index, std::function<hopefully<detail::box<std::any>> (Repn)>> rmap;
+    std::unordered_map<std::type_index, std::function<hopefully<detail::box<std::any>> (Repn, const reader&)>> rmap;
 
     // typed read from represenation
 
     template <typename T>
     hopefully<T> read(Repn v) const {
         if (auto i = rmap.find(std::type_index(typeid(T))); i!=rmap.end()) {
-            return (i->second)(v).
+            return (i->second)(v, *this).
                 transform([](detail::box<std::any> a) { return std::any_cast<T>(unbox(a)); });
         }
         else {
@@ -563,7 +452,7 @@ struct reader {
 
     hopefully<std::any> read(std::type_index ti, Repn v) const {
         if (auto i = rmap.find(ti); i!=rmap.end()) {
-            return (i->second)(v).transform([](auto a) { return unbox(a); });
+            return (i->second)(v, *this).transform([](auto a) { return unbox(a); });
         }
         else {
             return unsupported_type();
@@ -572,7 +461,7 @@ struct reader {
 
     void add() {}
 
-    // add a read function
+    // add a read function without reader reference parameter
 
     template <typename F,
               typename... Tail,
@@ -580,12 +469,25 @@ struct reader {
               std::enable_if_t<is_hopefully_v<std::invoke_result_t<F, Repn>>, int> = 0>
     void add(F read, Tail&&... tail) {
         using T = typename std::invoke_result_t<F, Repn>::value_type;
-        rmap[std::type_index(typeid(T))] = [read = std::move(read)](Repn v) -> hopefully<detail::box<std::any>> {
+        rmap[std::type_index(typeid(T))] = [read = std::move(read)](Repn v, const reader&) -> hopefully<detail::box<std::any>> {
             return read(v).transform([](auto x) -> detail::box<std::any> { return detail::box(std::any(x)); });
         };
         add(std::forward<Tail>(tail)...);
     }
 
+    // add a read function with reader reference parameter
+
+    template <typename F,
+              typename... Tail,
+              std::enable_if_t<std::is_invocable_v<F, Repn, const reader&>, int> = 0,
+              std::enable_if_t<is_hopefully_v<std::invoke_result_t<F, Repn, const reader&>>, int> = 0>
+    void add(F read, Tail&&... tail) {
+        using T = typename std::invoke_result_t<F, Repn, const reader&>::value_type;
+        rmap[std::type_index(typeid(T))] = [read = std::move(read)](Repn v, const reader& rdr) -> hopefully<detail::box<std::any>> {
+            return read(v, rdr).transform([](auto x) -> detail::box<std::any> { return detail::box(std::any(x)); });
+        };
+        add(std::forward<Tail>(tail)...);
+    }
     // add read functions from another reader
 
     template <typename... Tail>
@@ -605,6 +507,266 @@ struct reader {
     template <typename... Fs>
     explicit reader(Fs&&... fs) {
         add(std::forward<Fs>(fs)...);
+    }
+};
+
+template <typename Repn = std::string>
+struct writer {
+    using representation_type = Repn;
+    std::unordered_map<std::type_index, std::function<hopefully<Repn> (any_ptr, const writer&)>> wmap;
+
+    // typed write to representation
+
+    template <typename T>
+    hopefully<Repn> write(const T& v) const {
+        if (auto i = wmap.find(std::type_index(typeid(remove_cvref_t<T>))); i!=wmap.end()) {
+            const remove_cvref_t<T>* p = &v;
+            return (i->second)(any_ptr(p), *this);
+        }
+        else {
+            return unsupported_type();
+        }
+    }
+
+    // type-erased write to representation
+    // any_ptr argument is expected to represent a pointer of type const T* where
+    // ti == std::type_index(typeid(T)).
+
+    hopefully<Repn> write(std::type_index ti, any_ptr p) const {
+        if (auto i = wmap.find(ti); i!=wmap.end()) {
+            return (i->second)(p, *this);
+        }
+        else {
+            return unsupported_type();
+        }
+    }
+
+    void add() {}
+
+    // add a write function with signature R (U) where R converts to hopefully<Repn> and remove_cvref_T<U> is T.
+
+    template <typename F,
+              typename... Tail,
+              std::enable_if_t<n_args<F> == 1, int> = 0,
+              std::enable_if_t<std::is_convertible_v<return_value_t<F>, hopefully<Repn>>, int> = 0
+    >
+    void add(F write, Tail&&... tail) {
+        using A = remove_cvref_t<nth_argument_t<0, F>>;
+
+        wmap[std::type_index(typeid(A))] = [write = std::move(write)](any_ptr p, const writer&) -> hopefully<Repn> {
+            auto q = any_cast<const A*>(p);
+            if (!q) return unsupported_type(); // or internal error?
+            return write(*q);
+        };
+
+        add(std::forward<Tail>(tail)...);
+    }
+
+    // add a write function with signature R (U, const writer&) (see above).
+
+    template <typename F,
+              typename... Tail,
+              std::enable_if_t<n_args<F> == 2, int> = 0,
+              std::enable_if_t<std::is_same_v<nth_argument_t<1, F>, const writer&>, int> = 0,
+              std::enable_if_t<std::is_convertible_v<return_value_t<F>, hopefully<Repn>>, int> = 0
+    >
+    void add(F write, Tail&&... tail) {
+        using A = remove_cvref_t<nth_argument_t<0, F>>;
+
+        wmap[std::type_index(typeid(A))] = [write = std::move(write)](any_ptr p, const writer& wtr) -> hopefully<Repn> {
+            auto q = any_cast<const A*>(p);
+            if (!q) return unsupported_type(); // or internal error?
+            return write(*q, wtr);
+        };
+
+        add(std::forward<Tail>(tail)...);
+    }
+    // add write functions from another writer
+
+    template <typename... Tail>
+    void add(const writer& other, Tail&&... tail) {
+        for (const auto& item: other.wmap) {
+            wmap.insert_or_assign(item.first, item.second);
+        }
+        add(std::forward<Tail>(tail)...);
+    }
+
+    writer() = default;
+    writer(const writer&) = default;
+    writer(writer&&) = default;
+
+    // construct a reader from read functions and/or other readers
+
+    template <typename... Fs>
+    explicit writer(Fs&&... fs) {
+        add(std::forward<Fs>(fs)...);
+    }
+};
+
+
+// III. Reader/writer helpers, default reader and writer definitions
+// =================================================================
+
+// If C++20 is targetted instead of C++17, these ad hoc type traits and std::enable_if guards
+// can be replaced with concepts and requires clauses.
+
+template <typename X, typename = void>
+struct can_from_chars: std::false_type {};
+
+template <typename X>
+struct can_from_chars<X, std::void_t<decltype(std::from_chars((char *)0, (char *)0, std::declval<X&>()))>>: std::true_type {};
+
+template <typename X>
+inline constexpr bool can_from_chars_v = can_from_chars<X>::value;
+
+// - read a scalar value that is supported by std::from_chars, viz. a standard integer or floating point type.
+
+template <typename T, std::enable_if_t<can_from_chars_v<T>, int> = 0>
+hopefully<T> read_cc(std::string_view v) {
+    T x;
+    auto [p, err] = std::from_chars(&v.front(), &v.front()+v.size(), x);
+
+    if (err==std::errc::result_out_of_range) return invalid_value();
+    if (err!=std::errc() || p!=&v.front()+v.size()) return read_failure();
+    return x;
+}
+
+// - read a string, without any filters
+
+inline hopefully<std::string> read_string(std::string_view v) {
+    return std::string(v);
+}
+
+// - read a boolean true/false representation, case sensitive
+
+inline hopefully<bool> read_bool_alpha(std::string_view v) {
+    if (v=="true") return true;
+    else if (v=="false") return false;
+    else return read_failure();
+}
+
+// - read a delimitter-separated list of items, without delimiter escapes;
+//   C represents a container type, constructible from an iterator range.
+
+template <typename X, typename = void>
+struct has_value_type: std::false_type {};
+
+template <typename X>
+struct has_value_type<X, std::void_t<typename X::value_type>>: std::true_type {};
+
+template <typename X>
+inline constexpr bool has_value_type_v = has_value_type<X>::value;
+
+template <typename C,
+          std::enable_if_t<has_value_type_v<C>, int> = 0,
+          std::enable_if_t<std::is_constructible_v<C, const typename C::value_type*, const typename C::value_type*>, int> = 0>
+struct read_dsv {
+    using value_type = typename C::value_type;
+    std::function<hopefully<value_type> (std::string_view)> read_field; // if empty, use supplied reader
+    std::string delim;      // field separator
+    const bool skip_ws;     // if true, skip leading space/tabs in each field
+
+    explicit read_dsv(std::function<hopefully<value_type> (std::string_view)> read_field, std::string delim=",", bool skip_ws = true):
+        read_field(std::move(read_field)), delim(delim), skip_ws(skip_ws) {}
+
+    explicit read_dsv(std::string delim=",", bool skip_ws = true):
+        read_field{}, delim(delim), skip_ws(skip_ws) {}
+
+    hopefully<C> operator()(std::string_view v, const reader<std::string_view>& rdr) const {
+        constexpr auto npos = std::string_view::npos;
+        std::vector<value_type> fields;
+        while (!v.empty()) {
+            if (skip_ws) {
+                auto ns = v.find_first_not_of(" \t");
+                if (ns!=npos) v.remove_prefix(ns);
+            }
+            auto d = v.find(delim);
+            std::string_view f_repn = v.substr(0, d);
+            auto hf = read_field? read_field(f_repn): rdr.read<value_type>(f_repn);
+            if (hf) {
+                fields.push_back(std::move(hf.value()));
+                if (d!=npos) v.remove_prefix(d+1);
+                else break;
+            }
+            else {
+                return unexpected(std::move(hf.error()));
+            }
+        }
+
+        return v.empty()? C{}: C{&fields.front(), &fields.front()+fields.size()};
+    }
+};
+
+// write a scalar value that is supported by std::to_chars.
+
+template <typename X, typename = void>
+struct can_to_chars: std::false_type {};
+
+template <typename X>
+struct can_to_chars<X, std::void_t<decltype(std::to_chars((char *)0, (char *)0, std::declval<X&>()))>>: std::true_type {};
+
+template <typename X>
+inline constexpr bool can_to_chars_v = can_to_chars<X>::value;
+
+template <typename T, std::enable_if_t<can_to_chars_v<T>, int> = 0>
+hopefully<std::string> write_cc(const T& v) {
+    std::array<char, std::numeric_limits<T>::max_digits10+10> buf;
+
+    auto [p, err] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
+    if (err==std::errc())
+        return std::string(buf.data(), p);
+    else
+        return "error"; // probably can do better than this for error handling
+}
+
+// - write a string, without any filters (very boring)
+
+inline hopefully<std::string> write_string(const std::string& v) {
+    return v;
+}
+
+// - write a boolean true/false representation, case sensitive
+
+inline hopefully<std::string> write_bool_alpha(bool v) {
+    return v? "true": "false";
+}
+
+// - write a delimitter-separated list of items, without delimiter escapes;
+//   C represents a container type.
+
+template <typename C,
+          std::enable_if_t<has_value_type_v<C>, int> = 0>
+struct write_dsv {
+    using value_type = typename C::value_type;
+    std::function<std::string (const value_type&)> write_field; // if empty, use supplied writer
+    std::string delim;      // field separator
+
+    explicit write_dsv(std::function<hopefully<std::string> (const value_type&)> write_field, std::string delim=","):
+        write_field(std::move(write_field)), delim(delim) {}
+
+    explicit write_dsv(std::string delim=","):
+        write_field{}, delim(delim) {}
+
+    hopefully<std::string> operator()(const C& fields, const writer<std::string>& wtr) const {
+        using std::begin;
+        using std::end;
+
+        auto b = begin(fields);
+        auto e = end(fields);
+
+        if (b==e) return {};
+
+        std::string out;
+        for (;;) {
+            auto h = write_field? write_field(*b++): wtr.write(*b++);
+            if (h) out += h.value();
+            else return h;
+
+            if (b==e) break;
+            out += delim;
+        }
+
+        return out;
     }
 };
 
@@ -628,17 +790,17 @@ inline reader<std::string_view> make_default_reader() {
         read_cc<long double>,
         read_bool_alpha,
         read_string,
-        read_dsv<std::vector<short>>{read_cc<short>},
-        read_dsv<std::vector<unsigned short>>{read_cc<unsigned short>},
-        read_dsv<std::vector<int>>{read_cc<int>},
-        read_dsv<std::vector<unsigned int>>{read_cc<unsigned int>},
-        read_dsv<std::vector<long>>{read_cc<long>},
-        read_dsv<std::vector<unsigned long>>{read_cc<unsigned long>},
-        read_dsv<std::vector<long long>>{read_cc<long long>},
-        read_dsv<std::vector<unsigned long long>>{read_cc<unsigned long long>},
-        read_dsv<std::vector<float>>{read_cc<float>},
-        read_dsv<std::vector<double>>{read_cc<double>},
-        read_dsv<std::vector<long double>>{read_cc<long double>}
+        read_dsv<std::vector<short>>{},
+        read_dsv<std::vector<unsigned short>>{},
+        read_dsv<std::vector<int>>{},
+        read_dsv<std::vector<unsigned int>>{},
+        read_dsv<std::vector<long>>{},
+        read_dsv<std::vector<unsigned long>>{},
+        read_dsv<std::vector<long long>>{},
+        read_dsv<std::vector<unsigned long long>>{},
+        read_dsv<std::vector<float>>{},
+        read_dsv<std::vector<double>>{},
+        read_dsv<std::vector<long double>>{}
     );
 }
 
@@ -648,79 +810,6 @@ inline const reader<std::string_view>& default_reader() {
     static reader<std::string_view> s = detail::make_default_reader();
     return s;
 }
-
-
-template <typename Repn = std::string>
-struct writer {
-    using representation_type = Repn;
-    std::unordered_map<std::type_index, std::function<hopefully<Repn> (any_ptr)>> wmap;
-
-    // typed write to representation
-
-    template <typename T>
-    hopefully<Repn> write(T&& v) const {
-        if (auto i = wmap.find(std::type_index(typeid(remove_cvref_t<T>))); i!=wmap.end()) {
-            const remove_cvref_t<T>* p = &v;
-            return (i->second)(any_ptr(v));
-        }
-        else {
-            return unsupported_type();
-        }
-    }
-
-    // type-erased write to representation
-
-    hopefully<Repn> write(std::type_index ti, any_ptr p) const {
-        // TODO: actually confirm p has same underlying type as ti
-        if (auto i = wmap.find(ti); i!=wmap.end()) {
-            return (i->second)(p);
-        }
-        else {
-            return unsupported_type();
-        }
-    }
-
-    void add() {}
-
-    // add a write function with signature Repn (T&).
-
-    template <typename F,
-              typename... Tail,
-              std::enable_if_t<!std::is_void_v<detail::unary_function_arg_t<F>>, int> = 0
-    >
-    void add(F write, Tail&&... tail) {
-        using A = remove_cvref_t<detail::unary_function_arg_t<F>>;
-
-        wmap[std::type_index(typeid(A))] = [write = std::move(write)](any_ptr p) -> hopefully<Repn> {
-            auto q = any_cast<const A*>(p);
-            if (!q) return unsupported_type(); // or internal error?
-            return write(*q);
-        };
-
-        add(std::forward<Tail>(tail)...);
-    }
-
-    // add write functions from another writer
-
-    template <typename... Tail>
-    void add(const writer& other, Tail&&... tail) {
-        for (const auto& item: other.wmap) {
-            wmap.insert_or_assign(item.first, item.second);
-        }
-        add(std::forward<Tail>(tail)...);
-    }
-
-    writer() = default;
-    writer(const writer&) = default;
-    writer(writer&&) = default;
-
-    // construct a reader from read functions and/or other readers
-
-    template <typename... Fs>
-    explicit writer(Fs&&... fs) {
-        add(std::forward<Fs>(fs)...);
-    }
-};
 
 namespace detail {
 
@@ -739,17 +828,17 @@ inline writer<std::string> make_default_writer() {
         write_cc<long double>,
         write_bool_alpha,
         write_string,
-        write_dsv<std::vector<short>>{write_cc<short>},
-        write_dsv<std::vector<unsigned short>>{write_cc<unsigned short>},
-        write_dsv<std::vector<int>>{write_cc<int>},
-        write_dsv<std::vector<unsigned int>>{write_cc<unsigned int>},
-        write_dsv<std::vector<long>>{write_cc<long>},
-        write_dsv<std::vector<unsigned long>>{write_cc<unsigned long>},
-        write_dsv<std::vector<long long>>{write_cc<long long>},
-        write_dsv<std::vector<unsigned long long>>{write_cc<unsigned long long>},
-        write_dsv<std::vector<float>>{write_cc<float>},
-        write_dsv<std::vector<double>>{write_cc<double>},
-        write_dsv<std::vector<long double>>{write_cc<long double>}
+        write_dsv<std::vector<short>>{},
+        write_dsv<std::vector<unsigned short>>{},
+        write_dsv<std::vector<int>>{},
+        write_dsv<std::vector<unsigned int>>{},
+        write_dsv<std::vector<long>>{},
+        write_dsv<std::vector<unsigned long>>{},
+        write_dsv<std::vector<long long>>{},
+        write_dsv<std::vector<unsigned long long>>{},
+        write_dsv<std::vector<float>>{},
+        write_dsv<std::vector<double>>{},
+        write_dsv<std::vector<long double>>{}
     );
 }
 

@@ -8,21 +8,6 @@ When API is a little less volatile.
 
 Also: should we copy in the backport::exception unit tests?
 
-### Allow supplied writer helper functions to fail
-
-If something like write_cc fails, it should report that
-failure as an error return in a hopefully<std::string>.
-
-### Self-referencing readers/writers
-
-Pass reader object to reader functions (similarly, writers) so that
-a reader function for a compound type can use the already-defined
-reader functions for its components.
-
-Also: while implementing this, the type traits shenanigans for
-deducing argument types is getting a bit out of control. Tidy this
-up!
-
 ### Expand library of supplied read/write functions
 
 In particular, keywords representing a fixed set of values/enums;
@@ -41,17 +26,6 @@ may be desirable.
 
 Perhaps some sort of fall-back process? i.e. use a specific
 optional<X> read function if present.
-
-### Validating record values
-
-Given a collection of specification objects or a specficiation_set
-for a particular record type, the top-level validate function
-would return a vector of failure (invalid_value) values, one for
-each field a record which fails its validation.
-
-Involves a bit of rework on the specification class definition.
-
-Update: this is done, or at least done-ish.
 
 ### Allow validators that modify the value?
 
