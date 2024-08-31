@@ -313,7 +313,7 @@ struct typelist<H, Ts...> {
 };
 
 template <typename F>
-struct arglist_impl;
+struct arglist_impl { using type = void; };
 
 template <typename R, typename... As>
 struct arglist_impl<R (As...)> { using type = typelist<As...>; };
@@ -354,6 +354,15 @@ struct return_value_impl<R (C::*)(As...) const> { using type = R; };
 
 template <typename X>
 inline constexpr std::size_t n_args = detail::arglist<X>::type::length;
+
+template <typename X, std::size_t n, typename = void>
+struct has_n_args: std::false_type {};
+
+template <typename X, std::size_t n>
+struct has_n_args<X, n, std::enable_if_t<!std::is_void_v<typename detail::arglist<X>::type>>>: std::bool_constant<n_args<X> == n> {};
+
+template <typename X, std::size_t n>
+inline constexpr bool has_n_args_v = has_n_args<X, n>::value;
 
 template <std::size_t n, typename X>
 struct nth_argument { using type = typename detail::arglist<X>::type::template arg_t<n>; };
@@ -547,7 +556,7 @@ struct writer {
 
     template <typename F,
               typename... Tail,
-              std::enable_if_t<n_args<F> == 1, int> = 0,
+              std::enable_if_t<has_n_args_v<F, 1>, int> = 0,
               std::enable_if_t<std::is_convertible_v<return_value_t<F>, hopefully<Repn>>, int> = 0
     >
     void add(F write, Tail&&... tail) {
@@ -566,7 +575,7 @@ struct writer {
 
     template <typename F,
               typename... Tail,
-              std::enable_if_t<n_args<F> == 2, int> = 0,
+              std::enable_if_t<has_n_args_v<F, 2>, int> = 0,
               std::enable_if_t<std::is_same_v<nth_argument_t<1, F>, const writer&>, int> = 0,
               std::enable_if_t<std::is_convertible_v<return_value_t<F>, hopefully<Repn>>, int> = 0
     >
@@ -581,6 +590,7 @@ struct writer {
 
         add(std::forward<Tail>(tail)...);
     }
+
     // add write functions from another writer
 
     template <typename... Tail>
@@ -599,7 +609,7 @@ struct writer {
 
     template <typename... Fs>
     explicit writer(Fs&&... fs) {
-        add(std::forward<Fs>(fs)...);
+       add(std::forward<Fs>(fs)...);
     }
 };
 
