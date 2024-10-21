@@ -442,7 +442,6 @@ T any_cast(const any_ptr& p) noexcept { return p.as<T>(); }
 template <typename Repn = std::string_view>
 struct reader {
     using representation_type = Repn;
-    std::unordered_map<std::type_index, std::function<hopefully<detail::box<std::any>> (Repn, const reader&)>> rmap;
 
     // typed read from represenation
 
@@ -517,6 +516,9 @@ struct reader {
     explicit reader(Fs&&... fs) {
         add(std::forward<Fs>(fs)...);
     }
+
+private:
+    std::unordered_map<std::type_index, std::function<hopefully<detail::box<std::any>> (Repn, const reader&)>> rmap;
 };
 
 template <typename Repn = std::string>

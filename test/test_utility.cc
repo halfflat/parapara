@@ -100,7 +100,7 @@ TEST(parapara, n_args) {
     EXPECT_FALSE((has_n_args_v<decltype(foo), 1>));
 }
 
-TEST(pararapara, nth_argument) {
+TEST(parapara, nth_argument) {
     EXPECT_TRUE((std::is_same_v<double, nth_argument_t<0, decltype(fv1)>>));
 
     EXPECT_TRUE((std::is_same_v<const char*, nth_argument_t<0, ci2c>>));
