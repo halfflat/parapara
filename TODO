@@ -8,6 +8,20 @@ When API is a little less volatile.
 
 Also: should we copy in the backport::exception unit tests?
 
+### Support for writing to members of subobjects
+
+Without direct support for C++ pointers to members of
+subobjects or ptm arithmetic, writing parameter values
+to members of a subobject will require explicit support
+in the API. One approach is to replace pointer-to-members
+with more general setter (and possibly getter) functions
+which can be constructed from e.g. a chain of ptms.
+
+Alternatively or in addition, add support for delegating
+a parameter specification for a field of a subobject of type Q
+in a struct of type P to an exisiting parameter specification
+for type Q.
+
 ### Expand library of supplied read/write functions
 
 In particular, keywords representing a fixed set of values/enums;
@@ -42,6 +56,21 @@ and API.
 Have at least a demo if not a supported implementation of using
 JSON objects (e.g. from nlohmann/json) as the external representation
 type, as opposed to std::string_view and std::string.
+
+### Generalizing assignment
+
+Instead of always overwriting any fields in the parameter-storing
+structure, readers could instead do one of the following based on
+a per-parameter or per-parameter-set policy:
+
+ * Replace (current default)
+ * Replace default or ignore (if existing valus is default-constructed
+   value replace it, otherwise ignore parameter setting).
+ * Replace default or match (as above, but fail if there is a non-default
+   value that does not compare equal with the parameter setting).
+
+This set could be extended (e.g. to do some sort of accumulation or
+reduction).
 
 ### Locale-aware vs locale-agnostic readers/writers
 
