@@ -27,6 +27,11 @@
 
 namespace parapara {
 
+constexpr inline const char* version = "0.1.0";
+constexpr inline int version_major = 0;
+constexpr inline int version_minor = 1;
+constexpr inline int version_patch = 0;
+
 // Header organization:
 //
 // Preamble: Helper classes, importing backported expected class
@@ -74,25 +79,185 @@ struct remove_cvref {
 template <typename X>
 using remove_cvref_t = typename remove_cvref<X>::type;
 
+// Some type traits/metaprogramming helpers.
+//
+// n_args<X> returns the number of arguments to a non-overloaded function, function pointer, pointer to member function,
+// or class with operator() X.
+//
+// has_n_args_v<X, n> is true if X n_args<X> is well defined and equal to n, and false otherwise.
+//
+// nth_argument_t<X> is the type of the nth argument of objects of the callable type X as above.
+//
+// return_value_t<X> is the type of the nth argument of objects of the callable type X as above.
+
+namespace detail {
+
+template <typename... Ts>
+struct typelist {
+    static constexpr std::size_t length = sizeof...(Ts);
+    template <std::size_t>
+    using arg_t = void;
+};
+
+template <typename H, typename... Ts>
+struct typelist<H, Ts...> {
+    static constexpr std::size_t length = 1+sizeof...(Ts);
+    template <std::size_t i>
+    using arg_t = std::conditional_t<i==0, H, typename typelist<Ts...>::template arg_t<i-1>>;
+};
+
+template <typename F>
+struct arglist_impl { using type = void; };
+
+template <typename R, typename... As>
+struct arglist_impl<R (As...)> { using type = typelist<As...>; };
+
+template <typename R, typename... As>
+struct arglist_impl<R (*)(As...)> { using type = typelist<As...>; };
+
+template <typename C, typename R, typename... As>
+struct arglist_impl<R (C::*)(As...)> { using type = typelist<As...>; };
+
+template <typename C, typename R, typename... As>
+struct arglist_impl<R (C::*)(As...) const> { using type = typelist<As...>; };
+
+template <typename X, typename = void>
+struct arglist { using type = typename arglist_impl<X>::type; };
+
+template <typename X>
+struct arglist<X, std::void_t<decltype(&X::operator())>> {
+    using type = typename arglist_impl<decltype(&X::operator())>::type;
+};
+
+template <typename F>
+struct return_value_impl;
+
+template <typename R, typename... As>
+struct return_value_impl<R (As...)> { using type = R; };
+
+template <typename R, typename... As>
+struct return_value_impl<R (*)(As...)> { using type = R; };
+
+template <typename C, typename R, typename... As>
+struct return_value_impl<R (C::*)(As...)> { using type = R; };
+
+template <typename C, typename R, typename... As>
+struct return_value_impl<R (C::*)(As...) const> { using type = R; };
+
+} // namespace detail
+
+template <typename X>
+inline constexpr std::size_t n_args = detail::arglist<X>::type::length;
+
+template <typename X, std::size_t n, typename = void>
+struct has_n_args: std::false_type {};
+
+template <typename X, std::size_t n>
+struct has_n_args<X, n, std::enable_if_t<!std::is_void_v<typename detail::arglist<X>::type>>>: std::bool_constant<n_args<X> == n> {};
+
+template <typename X, std::size_t n>
+inline constexpr bool has_n_args_v = has_n_args<X, n>::value;
+
+template <std::size_t n, typename X>
+struct nth_argument { using type = typename detail::arglist<X>::type::template arg_t<n>; };
+
+template <std::size_t n, typename X>
+using nth_argument_t = typename nth_argument<n, X>::type;
+
+template <typename X, typename = void>
+struct return_value { using type = typename detail::return_value_impl<X>::type; };
+
+template <typename X>
+struct return_value<X, std::void_t<decltype(&X::operator())>> {
+    using type = typename detail::return_value_impl<decltype(&X::operator())>::type;
+};
+
+template <typename X>
+using return_value_t = typename return_value<X>::type;
+
+// any_ptr offers type erasure for pointers.
+//
+// For an any_ptr object a constructed from a pointer p of type T*
+//     * a.as<T*>() returns p
+//     * a.as<U*>() returns a null pointer if U is neither T nor void.
+//     * static_cast<bool>(a) is true if and only if p is not null.
+//
+// any_cast<U*>(p) is equivalent to p.as<U*>().
+
+struct any_ptr {
+    any_ptr() = default;
+    any_ptr(const any_ptr&) = default;
+
+    any_ptr(std::nullptr_t) {}
+
+    template <typename T>
+    any_ptr(T* ptr):
+        ptr_((void *)ptr), type_ptr_(&typeid(T*)) {}
+
+    const std::type_info& type() const noexcept { return *type_ptr_; }
+
+    bool has_value() const noexcept { return ptr_; }
+    operator bool() const noexcept { return has_value(); }
+
+    void reset() noexcept { ptr_ = nullptr; }
+    void reset(std::nullptr_t) noexcept { ptr_ = nullptr; }
+
+    template <typename T>
+    void reset(T* ptr) noexcept {
+        ptr_ = (void*)ptr;
+        type_ptr_ = &typeid(T*);
+    }
+
+    template <typename T, typename = std::enable_if_t<std::is_pointer<T>::value>>
+    T as() const noexcept {
+        if constexpr (std::is_void_v<std::remove_pointer_t<T>>) return (T)ptr_;
+        else return typeid(T)==type()? (T)ptr_: nullptr;
+    }
+
+    any_ptr& operator=(const any_ptr& other) noexcept {
+        type_ptr_ = other.type_ptr_;
+        ptr_ = other.ptr_;
+        return *this;
+    }
+
+    any_ptr& operator=(std::nullptr_t) noexcept {
+        reset();
+        return *this;
+    }
+
+    template <typename T>
+    any_ptr& operator=(T* ptr) noexcept {
+        reset(ptr);
+        return *this;
+    }
+
+private:
+    void* ptr_ = nullptr;
+    const std::type_info* type_ptr_ = &typeid(void);
+};
+
+template <typename T>
+T any_cast(const any_ptr& p) noexcept { return p.as<T>(); }
+
 
 // I. Failure handling and exceptions
 // ----------------------------------
 
-// Structs representing failure outcomes. The failure_context struct holds
+// Structs representing failure outcomes. The source_context struct holds
 // information about the data which triggered the error and is intended
 // to be used when constructing helpful error messages.
 
-struct failure_context {
+struct source_context {
     std::string key;     // associated parameter key, if any.
     std::string source;  // e.g. file name
     std::string record;  // record/line content
-    unsigned nr = 0;     // record number/line number (1-based)
-    unsigned cindex = 0; // character index into record/line (1-based)
+    unsigned nr = 0;     // record number/line number (1-based: 0 => no record number)
+    unsigned cindex = 0; // character index into record/line (1-based: 0 => no index)
 };
 
-// override/augment failure_context data
+// override/augment source_context data
 
-inline failure_context& operator+=(failure_context& f1, const failure_context& f2) {
+inline source_context& operator+=(source_context& f1, const source_context& f2) {
     if (!f2.key.empty()) f1.key = f2.key;
     if (!f2.source.empty()) f1.source = f2.source;
     if (!f2.record.empty()) f1.record = f2.record;
@@ -102,7 +267,7 @@ inline failure_context& operator+=(failure_context& f1, const failure_context& f
     return f1;
 }
 
-inline failure_context operator+(failure_context f1, const failure_context& f2) {
+inline source_context operator+(source_context f1, const source_context& f2) {
     return f1 += f2;
 }
 
@@ -117,46 +282,50 @@ struct failure {
         empty_optional
     } error = internal_error;
 
-    failure_context ctx;
+    source_context ctx;
     std::any data;        // any information pertinent to a specific error type.
 };
 
 // helpers for generating failure values
 
-inline auto internal_error(failure_context ctx = {}) {
+inline auto internal_error(source_context ctx = {}) {
     return unexpected(failure{failure::internal_error, std::move(ctx), {}});
 }
 
-inline auto read_failure(failure_context ctx = {}) {
+inline auto read_failure(source_context ctx = {}) {
     return unexpected(failure{failure::read_failure, std::move(ctx), {}});
 }
 
-inline auto invalid_value(std::string constraint = {}, failure_context ctx = {}) {
+inline auto invalid_value(std::string constraint = {}, source_context ctx = {}) {
     return unexpected(failure{failure::invalid_value, std::move(ctx), std::any{constraint}});
 }
 
-inline auto unsupported_type(failure_context ctx = {}) {
+inline auto unsupported_type(source_context ctx = {}) {
     return unexpected(failure{failure::unsupported_type, std::move(ctx), {}});
 }
 
-inline auto unrecognized_key(std::string_view key = {}, failure_context ctx = {}) {
+inline auto unrecognized_key(std::string_view key = {}, source_context ctx = {}) {
     if (!key.empty()) ctx.key = std::string(key);
     return unexpected(failure{failure::unrecognized_key, std::move(ctx), {}});
 }
 
-inline auto bad_syntax(failure_context ctx = {}) {
+inline auto bad_syntax(source_context ctx = {}) {
     return unexpected(failure{failure::bad_syntax, std::move(ctx), {}});
 }
 
-inline auto empty_optional(std::string_view key = {}, failure_context ctx = {}) {
+inline auto empty_optional(std::string_view key = {}, source_context ctx = {}) {
     if (!key.empty()) ctx.key = std::string(key);
     return unexpected(failure{failure::empty_optional, std::move(ctx), {}});
 }
 
 // manipulate context within failure
 
-inline auto with_ctx_key(std::string_view key) {
-    return [key](failure f) { f.ctx.key = std::string(key); return f; };
+inline auto with_ctx_key(std::string key) {
+    return [key = std::move(key)](failure f) { f.ctx.key = std::string(key); return f; };
+}
+
+inline auto with_ctx_source(std::string source) {
+    return [source = std::move(source)](failure f) { f.ctx.source = std::string(source); return f; };
 }
 
 // pretty-print failure info
@@ -296,154 +465,13 @@ inline const T& unbox(const box<T>& box) { return box.value; }
 template <typename T>
 inline T unbox(box<T>&& box) { return std::move(box.value); }
 
-// decode argument and return types of function, member function or functional
-
-template <typename... Ts>
-struct typelist {
-    static constexpr std::size_t length = sizeof...(Ts);
-    template <std::size_t>
-    using arg_t = void;
-};
-
-template <typename H, typename... Ts>
-struct typelist<H, Ts...> {
-    static constexpr std::size_t length = 1+sizeof...(Ts);
-    template <std::size_t i>
-    using arg_t = std::conditional_t<i==0, H, typename typelist<Ts...>::template arg_t<i-1>>;
-};
-
-template <typename F>
-struct arglist_impl { using type = void; };
-
-template <typename R, typename... As>
-struct arglist_impl<R (As...)> { using type = typelist<As...>; };
-
-template <typename R, typename... As>
-struct arglist_impl<R (*)(As...)> { using type = typelist<As...>; };
-
-template <typename C, typename R, typename... As>
-struct arglist_impl<R (C::*)(As...)> { using type = typelist<As...>; };
-
-template <typename C, typename R, typename... As>
-struct arglist_impl<R (C::*)(As...) const> { using type = typelist<As...>; };
-
-template <typename X, typename = void>
-struct arglist { using type = typename arglist_impl<X>::type; };
-
-template <typename X>
-struct arglist<X, std::void_t<decltype(&X::operator())>> {
-    using type = typename arglist_impl<decltype(&X::operator())>::type;
-};
-
-template <typename F>
-struct return_value_impl;
-
-template <typename R, typename... As>
-struct return_value_impl<R (As...)> { using type = R; };
-
-template <typename R, typename... As>
-struct return_value_impl<R (*)(As...)> { using type = R; };
-
-template <typename C, typename R, typename... As>
-struct return_value_impl<R (C::*)(As...)> { using type = R; };
-
-template <typename C, typename R, typename... As>
-struct return_value_impl<R (C::*)(As...) const> { using type = R; };
-
 } // namespace detail
-
-template <typename X>
-inline constexpr std::size_t n_args = detail::arglist<X>::type::length;
-
-template <typename X, std::size_t n, typename = void>
-struct has_n_args: std::false_type {};
-
-template <typename X, std::size_t n>
-struct has_n_args<X, n, std::enable_if_t<!std::is_void_v<typename detail::arglist<X>::type>>>: std::bool_constant<n_args<X> == n> {};
-
-template <typename X, std::size_t n>
-inline constexpr bool has_n_args_v = has_n_args<X, n>::value;
-
-template <std::size_t n, typename X>
-struct nth_argument { using type = typename detail::arglist<X>::type::template arg_t<n>; };
-
-template <std::size_t n, typename X>
-using nth_argument_t = typename nth_argument<n, X>::type;
-
-template <typename X, typename = void>
-struct return_value { using type = typename detail::return_value_impl<X>::type; };
-
-template <typename X>
-struct return_value<X, std::void_t<decltype(&X::operator())>> {
-    using type = typename detail::return_value_impl<decltype(&X::operator())>::type;
-};
-
-template <typename X>
-using return_value_t = typename return_value<X>::type;
-
-// 'any_ptr' type erasure for pointers; (should this live in detail namespace?)
-
-struct any_ptr {
-    any_ptr() = default;
-    any_ptr(const any_ptr&) = default;
-
-    any_ptr(std::nullptr_t) {}
-
-    template <typename T>
-    any_ptr(T* ptr):
-        ptr_((void *)ptr), type_ptr_(&typeid(T*)) {}
-
-    const std::type_info& type() const noexcept { return *type_ptr_; }
-
-    bool has_value() const noexcept { return ptr_; }
-    operator bool() const noexcept { return has_value(); }
-
-    void reset() noexcept { ptr_ = nullptr; }
-    void reset(std::nullptr_t) noexcept { ptr_ = nullptr; }
-
-    template <typename T>
-    void reset(T* ptr) noexcept {
-        ptr_ = (void*)ptr;
-        type_ptr_ = &typeid(T*);
-    }
-
-    template <typename T, typename = std::enable_if_t<std::is_pointer<T>::value>>
-    T as() const noexcept {
-        if constexpr (std::is_void_v<std::remove_pointer_t<T>>) return (T)ptr_;
-        else return typeid(T)==type()? (T)ptr_: nullptr;
-    }
-
-    any_ptr& operator=(const any_ptr& other) noexcept {
-        type_ptr_ = other.type_ptr_;
-        ptr_ = other.ptr_;
-        return *this;
-    }
-
-    any_ptr& operator=(std::nullptr_t) noexcept {
-        reset();
-        return *this;
-    }
-
-    template <typename T>
-    any_ptr& operator=(T* ptr) noexcept {
-        reset(ptr);
-        return *this;
-    }
-
-private:
-    void* ptr_ = nullptr;
-    const std::type_info* type_ptr_ = &typeid(void);
-};
-
-template <typename T>
-T any_cast(const any_ptr& p) noexcept { return p.as<T>(); }
-
 
 template <typename Repn = std::string_view>
 struct reader {
     using representation_type = Repn;
 
-    // typed read from represenation
+    // Typed read from represenation.
 
     template <typename T>
     hopefully<T> read(Repn v) const {
@@ -456,7 +484,7 @@ struct reader {
         }
     }
 
-    // type-erased read from representation
+    // Type-erased read from representation.
 
     hopefully<std::any> read(std::type_index ti, Repn v) const {
         if (auto i = rmap.find(ti); i!=rmap.end()) {
@@ -469,7 +497,7 @@ struct reader {
 
     void add() {}
 
-    // add a read function without reader reference parameter
+    // Add a read function with signature hopefully<T> (Repn), that is, without a reader reference second parameter.
 
     template <typename F,
               typename... Tail,
@@ -483,7 +511,8 @@ struct reader {
         add(std::forward<Tail>(tail)...);
     }
 
-    // add a read function with reader reference parameter
+    // Add a read function with signature hopefully<T> (Repn, const reader<Repn>&), that is,
+    // with a reader reference second parameter.
 
     template <typename F,
               typename... Tail,
@@ -491,12 +520,14 @@ struct reader {
               std::enable_if_t<is_hopefully_v<std::invoke_result_t<F, Repn, const reader&>>, int> = 0>
     void add(F read, Tail&&... tail) {
         using T = typename std::invoke_result_t<F, Repn, const reader&>::value_type;
-        rmap[std::type_index(typeid(T))] = [read = std::move(read)](Repn v, const reader& rdr) -> hopefully<detail::box<std::any>> {
-            return read(v, rdr).transform([](auto x) -> detail::box<std::any> { return detail::box(std::any(x)); });
-        };
+        rmap[std::type_index(typeid(T))] =
+            [read = std::move(read)](Repn v, const reader& rdr) -> hopefully<detail::box<std::any>> {
+                return read(v, rdr).transform([](auto x) -> detail::box<std::any> { return detail::box(std::any(x)); });
+            };
         add(std::forward<Tail>(tail)...);
     }
-    // add read functions from another reader
+
+    // Add read functions from another reader.
 
     template <typename... Tail>
     void add(const reader& other, Tail&&... tail) {
@@ -510,7 +541,7 @@ struct reader {
     reader(const reader&) = default;
     reader(reader&&) = default;
 
-    // construct a reader from read functions and/or other readers
+    // Construct a reader from read functions and/or other readers.
 
     template <typename... Fs>
     explicit reader(Fs&&... fs) {
@@ -526,7 +557,7 @@ struct writer {
     using representation_type = Repn;
     std::unordered_map<std::type_index, std::function<hopefully<Repn> (any_ptr, const writer&)>> wmap;
 
-    // typed write to representation
+    // Typed write to representation.
 
     template <typename T>
     hopefully<Repn> write(const T& v) const {
@@ -539,7 +570,7 @@ struct writer {
         }
     }
 
-    // type-erased write to representation
+    // Type-erased write to representation.
     // any_ptr argument is expected to represent a pointer of type const T* where
     // ti == std::type_index(typeid(T)).
 
@@ -554,7 +585,7 @@ struct writer {
 
     void add() {}
 
-    // add a write function with signature R (U) where R converts to hopefully<Repn> and remove_cvref_T<U> is T.
+    // Add a write function with signature R (U) where R converts to hopefully<Repn> and remove_cvref_T<U> is T.
 
     template <typename F,
               typename... Tail,
@@ -573,7 +604,7 @@ struct writer {
         add(std::forward<Tail>(tail)...);
     }
 
-    // add a write function with signature R (U, const writer&) (see above).
+    // Add a write function with signature R (U, const writer&) (see above).
 
     template <typename F,
               typename... Tail,
@@ -593,7 +624,7 @@ struct writer {
         add(std::forward<Tail>(tail)...);
     }
 
-    // add write functions from another writer
+    // Add write functions from another writer.
 
     template <typename... Tail>
     void add(const writer& other, Tail&&... tail) {
@@ -607,7 +638,7 @@ struct writer {
     writer(const writer&) = default;
     writer(writer&&) = default;
 
-    // construct a reader from read functions and/or other readers
+    // Construct a writer from write functions and/or other writers.
 
     template <typename... Fs>
     explicit writer(Fs&&... fs) {
@@ -631,7 +662,7 @@ struct can_from_chars<X, std::void_t<decltype(std::from_chars((char *)0, (char *
 template <typename X>
 inline constexpr bool can_from_chars_v = can_from_chars<X>::value;
 
-// - read a scalar value that is supported by std::from_chars, viz. a standard integer or floating point type.
+// - Read a scalar value that is supported by std::from_chars, viz. a standard integer or floating point type.
 
 template <typename T, std::enable_if_t<can_from_chars_v<T>, int> = 0>
 hopefully<T> read_cc(std::string_view v) {
@@ -643,13 +674,13 @@ hopefully<T> read_cc(std::string_view v) {
     return x;
 }
 
-// - read a string, without any filters
+// - Read a string, without any filters
 
 inline hopefully<std::string> read_string(std::string_view v) {
     return std::string(v);
 }
 
-// - read a boolean true/false representation, case sensitive
+// - Read a boolean true/false representation, case sensitive
 
 inline hopefully<bool> read_bool_alpha(std::string_view v) {
     if (v=="true") return true;
@@ -657,7 +688,7 @@ inline hopefully<bool> read_bool_alpha(std::string_view v) {
     else return read_failure();
 }
 
-// - read a delimitter-separated list of items, without delimiter escapes;
+// - Read a delimitter-separated list of items, without delimiter escapes;
 //   C represents a container type, constructible from an iterator range.
 
 template <typename X, typename = void>
@@ -678,7 +709,8 @@ struct read_dsv {
     std::string delim;      // field separator
     const bool skip_ws;     // if true, skip leading space/tabs in each field
 
-    explicit read_dsv(std::function<hopefully<value_type> (std::string_view)> read_field, std::string delim=",", bool skip_ws = true):
+    explicit read_dsv(std::function<hopefully<value_type> (std::string_view)> read_field,
+                      std::string delim=",", bool skip_ws = true):
         read_field(std::move(read_field)), delim(delim), skip_ws(skip_ws) {}
 
     explicit read_dsv(std::string delim=",", bool skip_ws = true):
@@ -709,7 +741,7 @@ struct read_dsv {
     }
 };
 
-// write a scalar value that is supported by std::to_chars.
+// - Write a scalar value that is supported by std::to_chars.
 
 template <typename X, typename = void>
 struct can_to_chars: std::false_type {};
@@ -731,20 +763,19 @@ hopefully<std::string> write_cc(const T& v) {
         return "error"; // probably can do better than this for error handling
 }
 
-// - write a string, without any filters (very boring)
+// - Write a string, without any filters (very boring)
 
 inline hopefully<std::string> write_string(const std::string& v) {
     return v;
 }
 
-// - write a boolean true/false representation, case sensitive
+// - Write a boolean true/false representation, case sensitive
 
 inline hopefully<std::string> write_bool_alpha(bool v) {
     return v? "true": "false";
 }
 
-// - write a delimitter-separated list of items, without delimiter escapes;
-//   C represents a container type.
+// - Write a delimitter-separated list of items, without delimiter escapes; C represents a container type.
 
 template <typename C,
           std::enable_if_t<has_value_type_v<C>, int> = 0>
@@ -784,8 +815,9 @@ struct write_dsv {
 
 namespace detail {
 
-// default reader uses charconv for numeric scalars, simple string reader,
-// true/false boolean read, and comma-delimmited reader for numeric vectors.
+// The default reader and writer use charconv for numeric scalars, the simple read_string/write_string,
+// the true/false represenation for bool with read_bool_alpha/write_bool_alpha, and comma-delimited 
+// and comma-delimmited reader for numeric vectors.
 
 inline reader<std::string_view> make_default_reader() {
     return reader<std::string_view>(
@@ -902,6 +934,10 @@ struct specification {
     std::string description;
     std::type_index field_type;
 
+    // Primary constructor: create specification for field given by field_ptr with validation function
+    // validate. validate must satisfy the requirement that given a value x of type Field,
+    // validate(x) is convertible to a value of type hopefully<Field>.
+
     template <typename Field, typename V, std::enable_if_t<validates_parameter_v<V, Field>, int> = 0>
     specification(std::string key, Field Record::* field_ptr, V validate, std::string description = ""):
         key(std::move(key)),
@@ -942,10 +978,47 @@ struct specification {
             })
     {}
 
+    // As above, but with trivial validator.
+
     template <typename Field>
     specification(std::string key, Field Record::* field_ptr, std::string description = ""):
         specification(key, field_ptr, [](auto&& x) { return decltype(x)(x); }, description)
     {}
+
+    // For a field of non-optional class type Field, delegate retrieval, assignment and validation of a member of
+    // that field to another specification of type specification<Field>.
+
+    template <typename Field,
+              typename std::enable_if_t<!is_optional_v<Field>, int> = 0,
+              typename std::enable_if_t<std::is_class_v<Field>, int> = 0>
+    specification(std::string key, Field Record::* field_ptr, const specification<Field>& delegate, std::string description):
+        key(std::move(key)),
+        description(description),
+        field_type(delegate.field_type),
+        assign_impl_(
+            [this, field_ptr = field_ptr, delegate_assign_impl = delegate.assign_impl_] (Record& record, std::any value) -> hopefully<void>
+            {
+                return delegate_assign_impl(record.*field_ptr, value);
+            }),
+        retrieve_impl_(
+            [field_ptr = field_ptr, delegate_retrieve_impl = delegate.retrieve_impl_] (const Record& record) -> any_ptr {
+                return delegate_retrieve_impl(record.*field_ptr);
+            }),
+        validate_impl_(
+            [delegate_validate_impl = delegate.validate_impl_] (any_ptr ptr) -> hopefully<std::any> {
+                return delegate_validate_impl(ptr);
+            })
+    {}
+
+    // As above, but take the description from the delegated specification.
+
+    template <typename Field,
+              typename std::enable_if_t<!is_optional_v<Field>, int> = 0>
+    specification(std::string key, Field Record::* field_ptr, const specification<Field>& delegate):
+        specification(key, field_ptr, delegate, delegate.description)
+    {}
+
+    // Use rdr to parse repn and if successful, validate and assign to record field.
 
     template <typename Reader = reader<std::string_view>>
     hopefully<void> read(Record& record, typename Reader::representation_type repn, const Reader& rdr = default_reader()) const {
@@ -954,6 +1027,9 @@ struct specification {
             transform_error(with_ctx_key(key));
     }
 
+    // Use wtr to produce representation of field value in record.
+    // A field with an empty optional value will generate an empty_optional failure.
+
     template <typename Writer = writer<std::string>>
     hopefully<typename Writer::representation_type> write(const Record& record, const Writer& wtr = default_writer()) const {
         return retrieve(record).
@@ -961,9 +1037,14 @@ struct specification {
                transform_error(with_ctx_key(key));
     }
 
+    // Given a std::any object holding a value of the field type, validate and assign to field in record.
+
     hopefully<void> assign(Record& record, std::any value) const {
         return assign_impl_(record, value).transform_error(with_ctx_key(key));
     }
+
+    // Return const pointer to the value of the field in record as an any_ptr.
+    // A field with an empty optional value will generate an empty_optional failure.
 
     hopefully<any_ptr> retrieve(const Record& record) const {
         any_ptr p = retrieve_impl_(record);
@@ -971,13 +1052,25 @@ struct specification {
         else return empty_optional(key);
     }
 
+    // Return the result of running the validation function on the value in the field of record.
+
     hopefully<std::any> validate(const Record& record) const {
         return validate_impl_(retrieve_impl_(record)).transform_error(with_ctx_key(key));
     }
 
+    template <typename>
+    friend class specification;
+
 private:
+    // Given a field type B or optional<B>, cast std::any value to B, validate, and assign to field of record object.
     std::function<hopefully<void> (Record &, std::any)> assign_impl_;
+
+    // Given a field type B or optional<B>, return const B* pointer to field value wrapped in any_ptr.
+    // Value is nullptr if field of type optional<B> is empty.
     std::function<any_ptr (const Record &)> retrieve_impl_;
+
+    // Given a field type B or optional<B>, cast any_ptr to const B*, run validation on corresponding value,
+    // and return successful result in std::any.
     std::function<hopefully<std::any> (any_ptr)> validate_impl_;
 };
 
@@ -1047,6 +1140,9 @@ struct specification_set {
         return canonicalize_? canonicalize_(v): std::string(v);
     }
 
+    auto begin() const { return set_.begin(); }
+    auto end() const { return set_.end(); }
+
     bool contains(std::string_view key) const { return set_.contains(canonicalize(key)); }
 
     const specification<Record>& at(std::string_view key) const {
@@ -1095,7 +1191,7 @@ specification_set(X&, std::function<std::string (std::string_view)>) -> specific
 //
 // The validator passed to the specification constructor can be any functional that takes a field value
 // of type U to hopefully<U>. The validator class below provides a convenience interface to producing
-// such functionals and also allows Kleisli composition via operator|= defined below.
+// such functionals and also allows Kleisli composition via operator&= defined below.
 
 template <typename Predicate = void> struct validator;
 
@@ -1139,9 +1235,8 @@ auto operator&=(V1 v1, V2 v2) {
 }
 
 
-// VI. Importers (and later, exporters)
+// VI. Importers and exporters
 // ====================================
-//
 //
 // import_k_eq_v:
 //
@@ -1150,16 +1245,35 @@ auto operator&=(V1 v1, V2 v2) {
 //
 // import_ini:
 //
-//     From a std::istream, parse key/value records line by line from an INI-style specification.
-//     Lines of the form [ _section_ ], ignoring leading and trailing whitespace, set the current section to _section_.
-//     Comments (lines starting with optional whitespace followed by '#') are skipped.
-//     Lines of the form _k_ = _v_ will assign the corresponding field _section_/_k_ (or just _k_ if _section_ is empty
-//     or unset) from value _v_, where / stands for the key separator. Whitespace surrounding _k_ or _v_ is ignored.
+//     Wrapper around ini_importer::run()
+//
+// ini_importer::
+//
+//     Stateful line-by-line parser and importer of INI-format configuration from a std::istream.
+//
+//     Each valid line of input is either:
+//     * Blank, and ignored.
+//     * A comment, comprising a line which begins with whitespace and a '#'. These are skipped.
+//     * A section heading, matching the PCRE ^\s*\[\s*(.*?)\s*\]\s*$ — the section name is the the RE group \1.
+//       Loosely, these lines consist of the section name enclosed in square brackets '[' and ']', with optional whitepace.
+//     * A key assignment matching the PCRE ^\s*(.*?)\s*=\s*(.*?)\s*$ — the key is in RE group \1 and the value in \2.
+//       These are essentially lines of the form key = value, ignoring any whitespace surrounding the key or the value.
+//     * A key by itself. These are treated as if they were key assignments of the form key = true.
+//
+//     The method ini_importer::run_one reads one section or key assignment, writing any assignment to the supplied
+//     record object based on the given specification set. Keys are prepended with the name of the current section and
+//     the given section separator string.
+//
+//     ini_importer::run_one returns the type of the parsed record or a failure (either bad_syntax in the case of a malformed
+//     INI record, or a failure from value parsing or validation). State can be queried with the section(), key(),
+//     base_key() (key without the prepended section) and context() methods. The record, specification set, reader and
+//     section separator can all differ in each invocation of run_one.
+//
+//     ini_importer::run calls run_one successively with the given parameters until EOF or the first error.
 
 template <typename Record>
-hopefully<void> import_k_eq_v(
-    Record &rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
-    std::string_view text, std::string eq_token = "=")
+hopefully<void> import_k_eq_v(Record &rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
+                              std::string_view text, std::string eq_token = "=")
 {
     constexpr auto npos = std::string_view::npos;
     std::string_view key, value;
@@ -1188,98 +1302,179 @@ hopefully<void> import_k_eq_v(
 
 
 template <typename Record>
-hopefully<void> import_k_eq_v(Record &rec, const specification_set<Record>& specs, std::string_view text, std::string eq_token = "=") {
-    return import_kv_pairs(rec, specs, default_reader(), text, eq_token);
+hopefully<void> import_k_eq_v(Record &rec, const specification_set<Record>& specs,
+                              std::string_view text, std::string eq_token = "=")
+{
+    return import_k_eq_v(rec, specs, default_reader(), text, eq_token);
+}
+
+struct ini_importer {
+    // Note: a non-zero value for ctx.cindex is effectively ignored here.
+    ini_importer(std::istream& in, source_context ctx = {}): in_(in), ctx_(ctx) {}
+
+    enum ini_record_type {
+        section_heading = 0,
+        key_assignment = 1,
+        eof = 2
+    };
+
+    explicit operator bool() const { return !!in_; }
+
+    // Retrieve current section.
+    std::string_view section() const { return section_; }
+
+    // Set current section and return old section value.
+    std::string section(std::string s) {
+        section_.swap(s);
+        return s;
+    }
+
+    // Retrieve assigned key.
+    std::string_view key() const { return ctx_.key; }
+
+    // Retrieve assigned key without section prefix.
+    std::string_view base_key() const {
+        if (ctx_.key.empty() || section_.empty()) {
+            return ctx_.key;
+        }
+        else {
+            return std::string_view(ctx_.key).substr(section_.length()+separator_.length());
+        }
+    }
+
+    // Retrieve source context for most recently read/parsed record.
+    const source_context& context() const { return ctx_; }
+
+    // Run run_once until eof or error.
+    template <typename Record>
+    hopefully<void> run(Record& rec, const specification_set<Record>& specs,
+                        const reader<std::string_view>& rdr, std::string secsep = "/")
+    {
+        while (*this) {
+            auto h = run_one(rec, specs, rdr, secsep);
+            if (!h) return unexpected(h.error());
+        }
+        return {};
+    }
+
+    template <typename Record>
+    hopefully<void> run(Record& rec, const specification_set<Record>& specs, std::string secsep = "/") {
+        return run(rec, specs, default_reader(), secsep);
+    }
+
+    // Parse next record.
+    // If a section heading, update current section and return ini_record_type::section_heading.
+    // If a key-value assignment, update rec via supplied arguments and return ini_record_type::key_assignment on success.
+    // If the istream is in a failure state, return ini_record_type::eof.
+    // Otherwise return a failure based on the current context.
+    template <typename Record>
+    hopefully<ini_record_type> run_one(Record& rec, const specification_set<Record>& specs,
+                                       const reader<std::string_view>& rdr, std::string secsep = "/")
+    {
+        constexpr auto npos = std::string_view::npos;
+        constexpr std::string_view ws(" \t\f\v\r\n");
+
+        separator_ = std::move(secsep);
+        std::string eq_token = "=";
+
+        auto trim_ws_prefix = [&](std::string_view& v) {
+            auto n = v.find_first_not_of(ws);
+            if (n==npos) n = v.size();
+            v.remove_prefix(n);
+            return n;
+        };
+
+        auto trim_ws_suffix = [&](std::string_view& v) {
+            auto n = v.find_last_not_of(ws);
+            if (n==npos) n = v.size();
+            else n = v.size()-n-1;
+            v.remove_suffix(n);
+            return n;
+        };
+
+        while (in_) {
+            std::getline(in_, ctx_.record);
+            std::string_view v(ctx_.record);
+            ++ctx_.nr;
+
+            ctx_.cindex = 0;
+            auto indent = trim_ws_prefix(v);
+
+            if (v.empty() || v.front()=='#') continue;
+            ctx_.cindex = 1 + indent;
+
+            // section?
+            if (v.front()=='[') {
+                trim_ws_suffix(v);
+
+                if (v.back()!=']') {
+                    source_context err_ctx{ctx_};
+                    err_ctx.cindex += v.length()-1;
+                    return bad_syntax(std::move(err_ctx));
+                }
+
+                v.remove_prefix(1);
+                v.remove_suffix(1);
+                trim_ws_prefix(v);
+                trim_ws_suffix(v);
+
+                section_ = std::string(v);
+                return ini_record_type::section_heading;
+            }
+
+            // key or key = value
+            auto eq_pos = v.find(eq_token);
+            std::string_view key = v.substr(0, eq_pos);
+            auto key_pos = trim_ws_prefix(key);
+            trim_ws_suffix(key);
+
+            auto value_pos = eq_pos==npos? v.size(): eq_pos+1;
+            std::string_view value = v.substr(value_pos);
+            value_pos += trim_ws_prefix(value);
+            trim_ws_suffix(value);
+
+            if (value.empty()) value = "true";
+
+            ctx_.cindex = 1 + indent + key_pos;
+            ctx_.key = section_.empty()? std::string(key): section_ + separator_ + std::string(key);
+
+            auto h = specs.read(rec, ctx_.key, value, rdr).
+                transform_error([&](failure f) {
+                    f.ctx += ctx_;
+                    f.ctx.cindex = 1+indent;
+                    f.ctx.cindex += f.error==failure::unrecognized_key? key_pos: value_pos;
+                    return f;
+                });
+
+            if (!h) return unexpected(h.error());
+            else return ini_record_type::key_assignment;
+        }
+
+        return ini_record_type::eof;
+    }
+
+    template <typename Record>
+    hopefully<ini_record_type> run_one(Record& rec, const specification_set<Record>& specs, std::string secsep = "/") {
+        return run_one(rec, specs, default_reader(), secsep);
+    }
+
+private:
+    std::istream& in_;
+    std::string section_;
+    std::string separator_;
+    source_context ctx_;
+};
+
+template <typename Record>
+hopefully<void> import_ini(Record& rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
+                           std::istream& in, source_context ctx, std::string secsep = "/") {
+    return ini_importer{in, std::move(ctx)}.run(rec, specs, rdr, secsep);
 }
 
 template <typename Record>
-hopefully<void> import_ini(
-    Record& rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
-    std::istream& in, std::string secsep = "/")
-{
-    constexpr auto npos = std::string_view::npos;
-    constexpr std::string_view ws(" \t\f\v\r\n");
-    std::string eq_token = "=";
-
-    auto trim_ws_prefix = [&](std::string_view& v) {
-        auto n = v.find_first_not_of(ws);
-        if (n==npos) n = v.size();
-        v.remove_prefix(n);
-        return n;
-    };
-
-    auto trim_ws_suffix = [&](std::string_view& v) {
-        auto n = v.find_last_not_of(ws);
-        if (n==npos) n = v.size();
-        else n = v.size()-n-1;
-        v.remove_suffix(n);
-        return n;
-    };
-
-    std::string section;
-    failure_context ctx;
-
-    while (in) {
-        std::getline(in, ctx.record);
-        std::string_view v(ctx.record);
-        ++ctx.nr;
-
-        auto indent = trim_ws_prefix(v);
-
-        // comment or empty?
-
-        if (v.empty() || v.front()=='#') continue;
-
-        // section?
-
-        if (v.front()=='[') {
-            ctx.cindex = 1 + indent;
-            trim_ws_suffix(v);
-
-            if (v.back()!=']') {
-                return bad_syntax(std::move(ctx));
-            }
-
-            v.remove_prefix(1);
-            v.remove_suffix(1);
-            trim_ws_prefix(v);
-            trim_ws_suffix(v);
-
-            section = std::string(v);
-            continue;
-        }
-
-        // otherwise key or key = value
-
-        auto eq_pos = v.find(eq_token);
-
-        std::string_view key = v.substr(0, eq_pos);
-        auto key_pos = trim_ws_prefix(key);
-        trim_ws_suffix(key);
-
-        auto value_pos = eq_pos==npos? v.size(): eq_pos+1;
-        std::string_view value = v.substr(value_pos);
-        value_pos += trim_ws_prefix(value);
-        trim_ws_suffix(value);
-
-        if (value.empty()) value = "true";
-
-        std::string sec_key(key);
-        if (!section.empty()) sec_key = section + secsep + sec_key;
-
-        auto h = specs.read(rec, sec_key, value, rdr).
-            transform_error([&](failure f) {
-                f.ctx += ctx;
-                f.ctx.cindex = 1+indent;
-                f.ctx.cindex += f.error==failure::unrecognized_key? key_pos: value_pos;
-                return f;
-            });
-
-        if (!h) return h;
-
-    }
-
-    return {};
+hopefully<void> import_ini(Record& rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
+                           std::istream& in, std::string secsep = "/") {
+    return ini_importer{in}.run(rec, specs, rdr, secsep);
 }
 
 // INI-style exporter.
