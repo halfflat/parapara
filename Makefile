@@ -3,7 +3,7 @@
 
 top:=$(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 
-examples:=ex1 ex2 ex3 ex4
+examples:=ex1 ex2 ex3 ex4 ex5
 all:: unit $(examples)
 
 test-src:=unit.cc test_failure.cc test_utility.cc test_reader.cc
@@ -47,6 +47,8 @@ ex3: ex3.o
 ex4: ex4.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
+ex5: ex5.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
 clean:
 	rm -f $(all-obj)
