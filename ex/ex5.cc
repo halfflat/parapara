@@ -16,6 +16,9 @@ namespace P = parapara;
 const char* ini_text =
     "# Validators require odd values in [odd] and even values in [even]\n"
     "\n"
+    "flag = true\n"
+    "\n";
+#if 0
     "# Section heading without ']' should give bad_syntax error\n"
     "[oops\n"
     "\n"
@@ -30,6 +33,8 @@ const char* ini_text =
     "a = 3\n"
     "b = 4\n"
     "c = 5\n";
+
+#endif
 
 int main(int, char**) {
     struct abc {
@@ -56,36 +61,44 @@ int main(int, char**) {
     };
 
     struct params {
+        bool flag = false;
         abc odd;
         abc even;
     } p;
 
-    std::vector<P::specification<params>> specs;
+    std::vector<P::specification<params>> specs = {
+        {"flag", &params::flag}
+    };
+
+#if 0
     for (const auto& s: abc_odd) {
         specs.emplace_back("odd/"+s.key, &params::odd, s);
     }
     for (const auto& s: abc_even) {
         specs.emplace_back("even/"+s.key, &params::even, s);
     }
-
+#endif
     P::source_context ctx;
     ctx.source = "ini_text";
     std::stringstream in(ini_text);
 
+#if 0
     P::specification_set spec_set(specs);
     P::ini_importer importer{in, ctx};
     while (importer) {
         auto h = importer.run_one(p, spec_set);
-        if (h && h.value()==P::ini_importer::section_heading) {
+        if (h && h.value()==P::ini_record_kind::section) {
             std::cout << "Checking section [" << importer.section() << "]\n";
         }
         if (!h) {
             std::cout << P::explain(h.error(), true) << '\n';
         }
     }
+#endif
+    specs[0].read(p, "true");
 
     std::cout << "Record values by key:\n";
     for (const auto& s: specs) {
-        std::cout << s.key << '\t' << *(s.retrieve(p).value().as<const int*>()) << '\n';
+        std::cout << s.key << '\t' << s.write(p).value() << '\n';
     }
 }
