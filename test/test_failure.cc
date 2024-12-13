@@ -6,35 +6,35 @@
 
 using namespace parapara;
 
-TEST(parapara, failure_context) {
+TEST(parapara, source_context) {
     // Test field overriding with operatore +
 
-    failure_context f = { "key", "source", "record", 10, 20 };
-    failure_context g = { "", "g_source", "", 0, 30 };
-    failure_context h = { "h_key", "", "h_record", 15, 0 };
+    source_context f = { "key", "source", "record", 10, 20 };
+    source_context g = { "", "g_source", "", 0, 30 };
+    source_context h = { "h_key", "", "h_record", 15, 0 };
 
-    auto eq = [](const failure_context& a, const failure_context& b) {
+    auto eq = [](const source_context& a, const source_context& b) {
         return a.key==b.key && a.source==b.source && a.record==b.record && a.nr==b.nr && a.cindex==b.cindex;
     };
 
-    failure_context fg = f;
+    source_context fg = f;
     fg += g;
 
     EXPECT_TRUE(eq(fg, f+g));
-    EXPECT_TRUE(eq(fg, failure_context{ "key", "g_source", "record", 10, 30 }));
+    EXPECT_TRUE(eq(fg, source_context{ "key", "g_source", "record", 10, 30 }));
 
-    failure_context fh = f;
+    source_context fh = f;
     fh += h;
 
     EXPECT_TRUE(eq(fh, f+h));
-    EXPECT_TRUE(eq(fh, failure_context{ "h_key", "source", "h_record", 15, 20 }));
+    EXPECT_TRUE(eq(fh, source_context{ "h_key", "source", "h_record", 15, 20 }));
 }
 
 TEST(parapara, failure_helpers) {
-    const failure_context c0 = { "", "", "", 0, 0 };
-    const failure_context c1 = { "key", "source", "record", 10, 20 };
+    const source_context c0 = { "", "", "", 0, 0 };
+    const source_context c1 = { "key", "source", "record", 10, 20 };
 
-    auto eq = [](const failure_context& a, const failure_context& b) {
+    auto eq = [](const source_context& a, const source_context& b) {
         return a.key==b.key && a.source==b.source && a.record==b.record && a.nr==b.nr && a.cindex==b.cindex;
     };
 
@@ -82,7 +82,7 @@ TEST(parapara, failure_helpers) {
     auto f9 = unrecognized_key("other key", c1).error();
     EXPECT_EQ(failure::unrecognized_key, f9.error);
 
-    failure_context c9bis = c1;
+    source_context c9bis = c1;
     c9bis.key = "other key";
     EXPECT_TRUE(eq(c9bis,f9.ctx));
 
@@ -106,7 +106,7 @@ TEST(parapara, failure_helpers) {
     auto f14 = empty_optional("quux", c1).error();
     EXPECT_EQ(failure::empty_optional, f14.error);
 
-    failure_context c14bis = c1;
+    source_context c14bis = c1;
     c14bis.key = "quux";
     EXPECT_TRUE(eq(c14bis,f14.ctx));
 
