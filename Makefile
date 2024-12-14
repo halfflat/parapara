@@ -3,7 +3,7 @@
 
 top:=$(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 
-examples:=ex1 ex2 ex3 ex4 ex5
+examples:=ex1 ex2 ex3 ex4 ex5 ex6
 all:: unit $(examples)
 
 test-src:=unit.cc test_failure.cc test_utility.cc test_reader.cc
@@ -19,8 +19,8 @@ vpath %.cc $(top)test
 vpath %.cc $(top)ex
 
 CXXSTD?=c++17
-#OPTFLAGS?=-O2 -fsanitize=address -march=native
-OPTFLAGS?=-march=native
+OPTFLAGS?=-O2 -march=native
+#OPTFLAGS?=-fsanitize=address -march=native
 CXXFLAGS+=$(OPTFLAGS) -MMD -MP -std=$(CXXSTD) -pedantic -Wall -Wextra -g -pthread
 CPPFLAGS+=-isystem $(gtest-inc) -I $(top)include
 
@@ -48,6 +48,9 @@ ex4: ex4.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
 ex5: ex5.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+ex6: ex6.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
 clean:

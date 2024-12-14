@@ -28,10 +28,10 @@
 
 namespace parapara {
 
-constexpr inline const char* version = "0.1.0";
+constexpr inline const char* version = "0.1.1";
 constexpr inline int version_major = 0;
 constexpr inline int version_minor = 1;
-constexpr inline int version_patch = 0;
+constexpr inline int version_patch = 1;
 
 // Header organization:
 //
@@ -944,12 +944,23 @@ struct specification {
         key(std::move(key)),
         description(description),
         field_type(std::type_index(typeid(base_field_t<Field>))),
+        validate_impl_(
+            [validate = std::move(validate)] (any_ptr ptr) -> hopefully<std::any> {
+                using B = base_field_t<Field>;
+                if (const auto value_ptr = ptr.as<const B*>()) {
+                    return static_cast<hopefully<B>>(validate(*value_ptr)).transform([](B x) { return std::any(std::move(x)); });
+                }
+                else {
+                    if constexpr (is_optional_v<Field>) return hopefully<std::any>{std::in_place, Field{}};
+                    else return internal_error();
+                }
+            }),
         assign_impl_(
-            [this, field_ptr = field_ptr] (Record& record, std::any value) -> hopefully<void>
+            [validate = validate_impl_, field_ptr = field_ptr] (Record& record, std::any value) -> hopefully<void>
             {
                 using B = base_field_t<Field>;
                 if (const B* value_ptr = std::any_cast<B>(&value)) {
-                    return validate_impl_(value_ptr).transform(
+                    return validate(value_ptr).transform(
                         [&record, field_ptr](std::any x) { record.*field_ptr = std::any_cast<B>(std::move(x)); });
                 }
                 else {
@@ -964,17 +975,6 @@ struct specification {
                 }
                 else {
                     return static_cast<const B*>(&(record.*field_ptr));
-                }
-            }),
-        validate_impl_(
-            [validate = std::move(validate)] (any_ptr ptr) -> hopefully<std::any> {
-                using B = base_field_t<Field>;
-                if (const auto value_ptr = ptr.as<const B*>()) {
-                    return static_cast<hopefully<B>>(validate(*value_ptr)).transform([](B x) { return std::any(std::move(x)); });
-                }
-                else {
-                    if constexpr (is_optional_v<Field>) return hopefully<std::any>{std::in_place, Field{}};
-                    else return internal_error();
                 }
             })
     {}
@@ -996,18 +996,18 @@ struct specification {
         key(std::move(key)),
         description(description),
         field_type(delegate.field_type),
+        validate_impl_(
+            [delegate_validate_impl = delegate.validate_impl_] (any_ptr ptr) -> hopefully<std::any> {
+                return delegate_validate_impl(ptr);
+            }),
         assign_impl_(
-            [this, field_ptr = field_ptr, delegate_assign_impl = delegate.assign_impl_] (Record& record, std::any value) -> hopefully<void>
+            [field_ptr = field_ptr, delegate_assign_impl = delegate.assign_impl_] (Record& record, std::any value) -> hopefully<void>
             {
                 return delegate_assign_impl(record.*field_ptr, value);
             }),
         retrieve_impl_(
             [field_ptr = field_ptr, delegate_retrieve_impl = delegate.retrieve_impl_] (const Record& record) -> any_ptr {
                 return delegate_retrieve_impl(record.*field_ptr);
-            }),
-        validate_impl_(
-            [delegate_validate_impl = delegate.validate_impl_] (any_ptr ptr) -> hopefully<std::any> {
-                return delegate_validate_impl(ptr);
             })
     {}
 
@@ -1063,6 +1063,10 @@ struct specification {
     friend class specification;
 
 private:
+    // Given a field type B or optional<B>, cast any_ptr to const B*, run validation on corresponding value,
+    // and return successful result in std::any.
+    std::function<hopefully<std::any> (any_ptr)> validate_impl_;
+    //
     // Given a field type B or optional<B>, cast std::any value to B, validate, and assign to field of record object.
     std::function<hopefully<void> (Record &, std::any)> assign_impl_;
 
@@ -1070,9 +1074,6 @@ private:
     // Value is nullptr if field of type optional<B> is empty.
     std::function<any_ptr (const Record &)> retrieve_impl_;
 
-    // Given a field type B or optional<B>, cast any_ptr to const B*, run validation on corresponding value,
-    // and return successful result in std::any.
-    std::function<hopefully<std::any> (any_ptr)> validate_impl_;
 };
 
 // key canonicalization
@@ -1360,7 +1361,7 @@ struct simple_ini_parser {
         auto eq = v.find('=');
         if (eq==npos) {
             auto e = v.find_last_not_of(ws);
-            return {ini_record_kind::key, token{v.substr(b+1,e-(b+1)), b+2}};
+            return {ini_record_kind::key, token{v.substr(b,e-b+1), b}};
         }
         // key = value
         else {
@@ -1448,6 +1449,7 @@ struct ini_style_importer {
 
         while (in_) {
             std::getline(in_, ctx_.record);
+            ++ctx_.nr;
             auto [kind, tokens] = parser_(std::string_view(ctx_.record));
 
             switch (kind) {
@@ -1480,6 +1482,7 @@ struct ini_style_importer {
                     });
 
             case ini_record_kind::syntax_error:
+                ctx_.cindex = tokens[0].second;
                 return bad_syntax(ctx_);
 
             case ini_record_kind::eof:
