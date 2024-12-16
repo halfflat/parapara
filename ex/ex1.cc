@@ -53,8 +53,8 @@ int main() {
     parapara::validator require_even([](auto n) { return !(n%2); }, "value is even");
 
     parapara::specification x_spec2("x", &record::x,
+        parapara::nonzero() &=
         require_even &=
-        parapara::at_least(5) &=
         parapara::at_most(10, "value is at most 10"));
 
     if (auto hv = x_spec2.assign(rec, 12)) {
