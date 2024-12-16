@@ -30,8 +30,8 @@ int main(int, char**) {
     };
 
     P::specification<params> specs[] = {
-        {"bar", &params::bar, P::minimum(0, "bar ≥ 0")},
-        {"xyzzy", &params::xyzzy, P::minimum(1, "xyzzy ≥ 1.0")}
+        {"bar", &params::bar, P::at_least(0, "bar ≥ 0")},
+        {"xyzzy", &params::xyzzy, P::at_least(1, "xyzzy ≥ 1.0")}
     };
 
     std::cout << "checking record p1:\n";
