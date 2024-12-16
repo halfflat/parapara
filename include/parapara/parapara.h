@@ -28,10 +28,10 @@
 
 namespace parapara {
 
-constexpr inline const char* version = "0.1.1";
+constexpr inline const char* version = "0.1.2";
 constexpr inline int version_major = 0;
 constexpr inline int version_minor = 1;
-constexpr inline int version_patch = 1;
+constexpr inline int version_patch = 2;
 
 // Header organization:
 //
@@ -1222,14 +1222,36 @@ auto require(Predicate p, std::string constraint = "") {
     return validator(std::move(p), std::move(constraint));
 }
 
+// (Should these go in a sub-namespace?)
+
 template <typename Value>
-auto minimum(Value v, std::string constraint = "value at least minimum") {
+auto at_least(Value v, std::string constraint = "value at least minimum") {
     return validator([v = std::move(v)](auto x) { return x>=v; }, std::move(constraint));
 }
 
 template <typename Value>
-auto maximum(Value v, std::string constraint = "value at most maximum") {
+auto greater_than(Value v, std::string constraint = "value greater than lower bound") {
+    return validator([v = std::move(v)](auto x) { return x>v; }, std::move(constraint));
+}
+
+template <typename Value>
+auto at_most(Value v, std::string constraint = "value at most maximum") {
     return validator([v = std::move(v)](auto x) { return x<=v; }, std::move(constraint));
+}
+
+template <typename Value>
+auto less_than(Value v, std::string constraint = "value less than upper bound") {
+    return validator([v = std::move(v)](auto x) { return x<v; }, std::move(constraint));
+}
+
+template <typename Value>
+auto nonzero(std::string constraint = "value must be non-zero") {
+    return validator([](auto x) { return x!=0; }, std::move(constraint));
+}
+
+template <typename Value>
+auto nonempty(std::string constraint = "value must be non-empty") {
+    return validator([](auto x) { return !x.empty(); }, std::move(constraint));
 }
 
 // Operator (right associative) for Kleisli composition in std::expect. ADL will find this operator when the first

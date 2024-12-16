@@ -50,15 +50,12 @@ int main() {
         std::cout << explain(hv.error()) << '\n';
     }
 
-    // auto is_even = [](auto n) { return !(n%2); };
     parapara::validator require_even([](auto n) { return !(n%2); }, "value is even");
 
     parapara::specification x_spec2("x", &record::x,
-        //parapara::require([](int n) { return n%2==0; }, "value is even") >>=
-        //parapara::require(is_even, "value is even") >>=
         require_even &=
-        parapara::minimum(5) &=
-        parapara::maximum(10, "value is at most 10"));
+        parapara::at_least(5) &=
+        parapara::at_most(10, "value is at most 10"));
 
     if (auto hv = x_spec2.assign(rec, 12)) {
         std::cout << "ok; record.x = " << rec.x << '\n';
