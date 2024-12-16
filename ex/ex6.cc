@@ -183,6 +183,7 @@ int main(int, char**) {
     struct params {
         int a = 0;
         std::string b;
+        bool top = false;
         int top_a = 0;
         int top_sub_a = 0;
         int top_sub_subsub_a = 0;
@@ -192,6 +193,7 @@ int main(int, char**) {
     P::specification<params> specs[] = {
         {"a", &params::a},
         {"b", &params::b},
+        {"top", &params::top},
         {"top/a", &params::top_a},
         {"top/sub/a", &params::top_sub_a},
         {"top/sub/subsub/a", &params::top_sub_subsub_a},

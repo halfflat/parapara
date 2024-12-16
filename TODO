@@ -10,17 +10,16 @@ Also: should we copy in the backport::exception unit tests?
 
 ### Support for writing to members of subobjects
 
-Without direct support for C++ pointers to members of
-subobjects or ptm arithmetic, writing parameter values
-to members of a subobject will require explicit support
-in the API. One approach is to replace pointer-to-members
-with more general setter (and possibly getter) functions
-which can be constructed from e.g. a chain of ptms.
+This is currently provided by delegating specifications
+for a subobject of a field to specifications defined for
+that field.
 
-Alternatively or in addition, add support for delegating
-a parameter specification for a field of a subobject of type Q
-in a struct of type P to an exisiting parameter specification
-for type Q.
+Possibility of adding mechanism for direct access to
+subobject members remains, but that might rely upon an
+implementation that relies upon implementation-defined
+behaviour (or even in theory UB if not in practice) due
+to some lacunae in the C++ spec regarding object
+representations.
 
 ### Expand library of supplied read/write functions
 
@@ -48,6 +47,11 @@ constructing them. Should they be permitted? If so, document
 and provide support and helper functions for them. If not,
 remove support and consequently simplify the specification class
 and API.
+
+### More validators
+
+Supply a few more simple validators, and maybe change the names
+of existing ones to be clearer.
 
 ## Medium priority
 
@@ -94,6 +98,9 @@ another other contexts where UCS-2 or UCS-4 representations might
 be used. Take the current std::sting_view/std::string represenations
 and substitute std::basic_string_view/std::basic_string, propagating
 CharT and Traits?
+
+Also can consider unicode normalisation as a canonicalization option
+for specification_set.
 
 ### Closer integration with tinyopt
 

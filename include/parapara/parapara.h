@@ -321,6 +321,10 @@ inline auto empty_optional(std::string_view key = {}, source_context ctx = {}) {
 
 // manipulate context within failure
 
+inline auto with_ctx(source_context ctx) {
+    return [ctx = std::move(ctx)](failure f) { f.ctx += ctx; return f; };
+}
+
 inline auto with_ctx_key(std::string key) {
     return [key = std::move(key)](failure f) { f.ctx.key = std::string(key); return f; };
 }
@@ -1266,6 +1270,9 @@ auto operator&=(V1 v1, V2 v2) {
 //     record object based on the given specification set. Keys are prepended with the name of the current section and
 //     the given section separator string.
 //
+//     When a section is encountered, set the corresponding parameter to true if there a boolean specification of the same
+//     name in the specification set.
+//
 //     ini_importer::run_one returns the type of the parsed record or a failure (either bad_syntax in the case of a malformed
 //     INI record, or a failure from value parsing or validation). State can be queried with the section(), key(),
 //     base_key() (key without the prepended section) and context() methods. The record, specification set, reader and
@@ -1456,6 +1463,15 @@ struct ini_style_importer {
             case ini_record_kind::section:
                 section_ = tokens[0].first;
                 ctx_.cindex = tokens[0].second;
+
+                if (auto sp = specs.get_if(section_)) {
+                    if (sp->field_type == typeid(bool)) {
+                        return sp->assign(rec, true).
+                            transform([] { return ini_record_kind::section; }).
+                            transform_error(with_ctx(ctx_));
+                    }
+                }
+
                 return ini_record_kind::section;
 
             case ini_record_kind::key:
@@ -1464,10 +1480,7 @@ struct ini_style_importer {
 
                 return specs.read(rec, ctx_.key, "true", rdr).
                     transform([] { return ini_record_kind::key; }).
-                    transform_error([&](failure f) {
-                        f.ctx += ctx_;
-                        return f;
-                    });
+                    transform_error(with_ctx(ctx_));
 
             case ini_record_kind::key_value:
                 ctx_.key = section_.empty()? tokens[0].first: section_ + separator_ + tokens[0].first;
