@@ -12,6 +12,7 @@
 #include <string_view>
 #include <typeindex>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -27,10 +28,10 @@
 
 namespace parapara {
 
-constexpr inline const char* version = "0.1.0";
+constexpr inline const char* version = "0.1.1";
 constexpr inline int version_major = 0;
 constexpr inline int version_minor = 1;
-constexpr inline int version_patch = 0;
+constexpr inline int version_patch = 1;
 
 // Header organization:
 //
@@ -319,6 +320,10 @@ inline auto empty_optional(std::string_view key = {}, source_context ctx = {}) {
 }
 
 // manipulate context within failure
+
+inline auto with_ctx(source_context ctx) {
+    return [ctx = std::move(ctx)](failure f) { f.ctx += ctx; return f; };
+}
 
 inline auto with_ctx_key(std::string key) {
     return [key = std::move(key)](failure f) { f.ctx.key = std::string(key); return f; };
@@ -943,12 +948,23 @@ struct specification {
         key(std::move(key)),
         description(description),
         field_type(std::type_index(typeid(base_field_t<Field>))),
+        validate_impl_(
+            [validate = std::move(validate)] (any_ptr ptr) -> hopefully<std::any> {
+                using B = base_field_t<Field>;
+                if (const auto value_ptr = ptr.as<const B*>()) {
+                    return static_cast<hopefully<B>>(validate(*value_ptr)).transform([](B x) { return std::any(std::move(x)); });
+                }
+                else {
+                    if constexpr (is_optional_v<Field>) return hopefully<std::any>{std::in_place, Field{}};
+                    else return internal_error();
+                }
+            }),
         assign_impl_(
-            [this, field_ptr = field_ptr] (Record& record, std::any value) -> hopefully<void>
+            [validate = validate_impl_, field_ptr = field_ptr] (Record& record, std::any value) -> hopefully<void>
             {
                 using B = base_field_t<Field>;
                 if (const B* value_ptr = std::any_cast<B>(&value)) {
-                    return validate_impl_(value_ptr).transform(
+                    return validate(value_ptr).transform(
                         [&record, field_ptr](std::any x) { record.*field_ptr = std::any_cast<B>(std::move(x)); });
                 }
                 else {
@@ -963,17 +979,6 @@ struct specification {
                 }
                 else {
                     return static_cast<const B*>(&(record.*field_ptr));
-                }
-            }),
-        validate_impl_(
-            [validate = std::move(validate)] (any_ptr ptr) -> hopefully<std::any> {
-                using B = base_field_t<Field>;
-                if (const auto value_ptr = ptr.as<const B*>()) {
-                    return static_cast<hopefully<B>>(validate(*value_ptr)).transform([](B x) { return std::any(std::move(x)); });
-                }
-                else {
-                    if constexpr (is_optional_v<Field>) return hopefully<std::any>{std::in_place, Field{}};
-                    else return internal_error();
                 }
             })
     {}
@@ -995,18 +1000,18 @@ struct specification {
         key(std::move(key)),
         description(description),
         field_type(delegate.field_type),
+        validate_impl_(
+            [delegate_validate_impl = delegate.validate_impl_] (any_ptr ptr) -> hopefully<std::any> {
+                return delegate_validate_impl(ptr);
+            }),
         assign_impl_(
-            [this, field_ptr = field_ptr, delegate_assign_impl = delegate.assign_impl_] (Record& record, std::any value) -> hopefully<void>
+            [field_ptr = field_ptr, delegate_assign_impl = delegate.assign_impl_] (Record& record, std::any value) -> hopefully<void>
             {
                 return delegate_assign_impl(record.*field_ptr, value);
             }),
         retrieve_impl_(
             [field_ptr = field_ptr, delegate_retrieve_impl = delegate.retrieve_impl_] (const Record& record) -> any_ptr {
                 return delegate_retrieve_impl(record.*field_ptr);
-            }),
-        validate_impl_(
-            [delegate_validate_impl = delegate.validate_impl_] (any_ptr ptr) -> hopefully<std::any> {
-                return delegate_validate_impl(ptr);
             })
     {}
 
@@ -1062,6 +1067,10 @@ struct specification {
     friend class specification;
 
 private:
+    // Given a field type B or optional<B>, cast any_ptr to const B*, run validation on corresponding value,
+    // and return successful result in std::any.
+    std::function<hopefully<std::any> (any_ptr)> validate_impl_;
+    //
     // Given a field type B or optional<B>, cast std::any value to B, validate, and assign to field of record object.
     std::function<hopefully<void> (Record &, std::any)> assign_impl_;
 
@@ -1069,9 +1078,6 @@ private:
     // Value is nullptr if field of type optional<B> is empty.
     std::function<any_ptr (const Record &)> retrieve_impl_;
 
-    // Given a field type B or optional<B>, cast any_ptr to const B*, run validation on corresponding value,
-    // and return successful result in std::any.
-    std::function<hopefully<std::any> (any_ptr)> validate_impl_;
 };
 
 // key canonicalization
@@ -1247,7 +1253,7 @@ auto operator&=(V1 v1, V2 v2) {
 //
 //     Wrapper around ini_importer::run()
 //
-// ini_importer::
+// ini_importer:
 //
 //     Stateful line-by-line parser and importer of INI-format configuration from a std::istream.
 //
@@ -1264,12 +1270,22 @@ auto operator&=(V1 v1, V2 v2) {
 //     record object based on the given specification set. Keys are prepended with the name of the current section and
 //     the given section separator string.
 //
+//     When a section is encountered, set the corresponding parameter to true if there a boolean specification of the same
+//     name in the specification set.
+//
 //     ini_importer::run_one returns the type of the parsed record or a failure (either bad_syntax in the case of a malformed
 //     INI record, or a failure from value parsing or validation). State can be queried with the section(), key(),
 //     base_key() (key without the prepended section) and context() methods. The record, specification set, reader and
 //     section separator can all differ in each invocation of run_one.
 //
 //     ini_importer::run calls run_one successively with the given parameters until EOF or the first error.
+//
+// INI importer customization
+// --------------------------
+//
+// The ini_importer class is an alias for ini_style_importer<simple_ini_parser>; using a different parser can
+// provide support for other INI-like formats comprising a sequence of records, one per line, that are either section headers
+// or key/key-value records.
 
 template <typename Record>
 hopefully<void> import_k_eq_v(Record &rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
@@ -1308,15 +1324,78 @@ hopefully<void> import_k_eq_v(Record &rec, const specification_set<Record>& spec
     return import_k_eq_v(rec, specs, default_reader(), text, eq_token);
 }
 
-struct ini_importer {
-    // Note: a non-zero value for ctx.cindex is effectively ignored here.
-    ini_importer(std::istream& in, source_context ctx = {}): in_(in), ctx_(ctx) {}
+enum class ini_record_kind {
+    empty = 0,
+    section,        // 1 token
+    key,            // 1 token
+    key_value,      // 2 tokens
+    syntax_error,   // 1 token, only cindex relevant
+    eof
+};
 
-    enum ini_record_type {
-        section_heading = 0,
-        key_assignment = 1,
-        eof = 2
-    };
+struct ini_record {
+    ini_record_kind kind = ini_record_kind::empty;
+
+    // token value and cindex
+    using token = std::pair<std::string, unsigned>;
+    std::array<token, 2> tokens{};
+};
+
+struct simple_ini_parser {
+    ini_record operator()(std::string_view v) {
+        constexpr auto npos = std::string_view::npos;
+        constexpr std::string_view ws{" \t\f\v\r\n"};
+        using token = ini_record::token;
+
+        auto b = v.find_first_not_of(ws);
+
+        // empty or comment?
+        if (b==npos || v[b]=='#') return ini_record{ini_record_kind::empty};
+
+        // section heading?
+        if (v[b]=='[') {
+            auto e = v.find_last_not_of(ws);
+
+            // check for malformed heading
+            if (v[e]!=']') {
+                return {ini_record_kind::syntax_error, token{"", e}};
+            }
+
+            return {ini_record_kind::section, token{v.substr(b+1,e-(b+1)), b+2}};
+        }
+
+        // key without value?
+        auto eq = v.find('=');
+        if (eq==npos) {
+            auto e = v.find_last_not_of(ws);
+            return {ini_record_kind::key, token{v.substr(b,e-b+1), b}};
+        }
+        // key = value
+        else {
+            unsigned klen = eq==b? 0: v.find_last_not_of(ws, eq-1)+1-b;
+
+            if (eq==v.length()-1) {
+                return {ini_record_kind::key_value, token{v.substr(b, klen), b+1}, token{"", v.length()}};
+            }
+            else {
+                unsigned vb = v.find_first_not_of(ws, eq+1);
+                unsigned vl = v.find_last_not_of(ws);
+
+                return {ini_record_kind::key_value, token{v.substr(b, klen), b+1}, token{v.substr(vb, vl+1-vb), vb+1}};
+            }
+        }
+    }
+};
+
+template <typename Parser>
+struct ini_style_importer {
+    ini_style_importer(std::istream& in, source_context ctx = {}):
+        parser_{}, in_(in), ctx_(std::move(ctx))
+    {}
+
+    ini_style_importer(Parser p, std::istream& in, source_context ctx = {}):
+        parser_{std::move(p)}, in_(in), ctx_(std::move(ctx))
+    {}
 
     explicit operator bool() const { return !!in_; }
 
@@ -1362,108 +1441,88 @@ struct ini_importer {
         return run(rec, specs, default_reader(), secsep);
     }
 
-    // Parse next record.
+    // Read, parse, and process next record.
     // If a section heading, update current section and return ini_record_type::section_heading.
     // If a key-value assignment, update rec via supplied arguments and return ini_record_type::key_assignment on success.
     // If the istream is in a failure state, return ini_record_type::eof.
     // Otherwise return a failure based on the current context.
+
     template <typename Record>
-    hopefully<ini_record_type> run_one(Record& rec, const specification_set<Record>& specs,
+    hopefully<ini_record_kind> run_one(Record& rec, const specification_set<Record>& specs,
                                        const reader<std::string_view>& rdr, std::string secsep = "/")
     {
-        constexpr auto npos = std::string_view::npos;
-        constexpr std::string_view ws(" \t\f\v\r\n");
-
         separator_ = std::move(secsep);
         std::string eq_token = "=";
 
-        auto trim_ws_prefix = [&](std::string_view& v) {
-            auto n = v.find_first_not_of(ws);
-            if (n==npos) n = v.size();
-            v.remove_prefix(n);
-            return n;
-        };
-
-        auto trim_ws_suffix = [&](std::string_view& v) {
-            auto n = v.find_last_not_of(ws);
-            if (n==npos) n = v.size();
-            else n = v.size()-n-1;
-            v.remove_suffix(n);
-            return n;
-        };
-
         while (in_) {
             std::getline(in_, ctx_.record);
-            std::string_view v(ctx_.record);
             ++ctx_.nr;
+            auto [kind, tokens] = parser_(std::string_view(ctx_.record));
 
-            ctx_.cindex = 0;
-            auto indent = trim_ws_prefix(v);
+            switch (kind) {
+            case ini_record_kind::section:
+                section_ = tokens[0].first;
+                ctx_.cindex = tokens[0].second;
 
-            if (v.empty() || v.front()=='#') continue;
-            ctx_.cindex = 1 + indent;
-
-            // section?
-            if (v.front()=='[') {
-                trim_ws_suffix(v);
-
-                if (v.back()!=']') {
-                    source_context err_ctx{ctx_};
-                    err_ctx.cindex += v.length()-1;
-                    return bad_syntax(std::move(err_ctx));
+                if (auto sp = specs.get_if(section_)) {
+                    if (sp->field_type == typeid(bool)) {
+                        return sp->assign(rec, true).
+                            transform([] { return ini_record_kind::section; }).
+                            transform_error(with_ctx(ctx_));
+                    }
                 }
 
-                v.remove_prefix(1);
-                v.remove_suffix(1);
-                trim_ws_prefix(v);
-                trim_ws_suffix(v);
+                return ini_record_kind::section;
 
-                section_ = std::string(v);
-                return ini_record_type::section_heading;
+            case ini_record_kind::key:
+                ctx_.key = section_.empty()? tokens[0].first: section_ + separator_ + tokens[0].first;
+                ctx_.cindex = tokens[0].second;
+
+                return specs.read(rec, ctx_.key, "true", rdr).
+                    transform([] { return ini_record_kind::key; }).
+                    transform_error(with_ctx(ctx_));
+
+            case ini_record_kind::key_value:
+                ctx_.key = section_.empty()? tokens[0].first: section_ + separator_ + tokens[0].first;
+                ctx_.cindex = tokens[0].second;
+
+                return specs.read(rec, ctx_.key, tokens[1].first, rdr).
+                    transform([] { return ini_record_kind::key_value; }).
+                    transform_error([&](failure f) {
+                        f.ctx += ctx_;
+                        if (f.error!=failure::unrecognized_key) f.ctx.cindex = tokens[1].second;
+                        return f;
+                    });
+
+            case ini_record_kind::syntax_error:
+                ctx_.cindex = tokens[0].second;
+                return bad_syntax(ctx_);
+
+            case ini_record_kind::eof:
+                return ini_record_kind::eof;
+
+            case ini_record_kind::empty:
+                ; // empty record: continue
             }
-
-            // key or key = value
-            auto eq_pos = v.find(eq_token);
-            std::string_view key = v.substr(0, eq_pos);
-            auto key_pos = trim_ws_prefix(key);
-            trim_ws_suffix(key);
-
-            auto value_pos = eq_pos==npos? v.size(): eq_pos+1;
-            std::string_view value = v.substr(value_pos);
-            value_pos += trim_ws_prefix(value);
-            trim_ws_suffix(value);
-
-            if (value.empty()) value = "true";
-
-            ctx_.cindex = 1 + indent + key_pos;
-            ctx_.key = section_.empty()? std::string(key): section_ + separator_ + std::string(key);
-
-            auto h = specs.read(rec, ctx_.key, value, rdr).
-                transform_error([&](failure f) {
-                    f.ctx += ctx_;
-                    f.ctx.cindex = 1+indent;
-                    f.ctx.cindex += f.error==failure::unrecognized_key? key_pos: value_pos;
-                    return f;
-                });
-
-            if (!h) return unexpected(h.error());
-            else return ini_record_type::key_assignment;
         }
-
-        return ini_record_type::eof;
+        return ini_record_kind::eof;
     }
 
     template <typename Record>
-    hopefully<ini_record_type> run_one(Record& rec, const specification_set<Record>& specs, std::string secsep = "/") {
+    hopefully<ini_record_kind> run_one(Record& rec, const specification_set<Record>& specs, std::string secsep = "/") {
         return run_one(rec, specs, default_reader(), secsep);
     }
 
 private:
+    Parser parser_;
     std::istream& in_;
+    source_context ctx_;
+
     std::string section_;
     std::string separator_;
-    source_context ctx_;
 };
+
+using ini_importer = ini_style_importer<simple_ini_parser>;
 
 template <typename Record>
 hopefully<void> import_ini(Record& rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
