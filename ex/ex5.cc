@@ -78,10 +78,10 @@ int main(int, char**) {
     ctx.source = "ini_text";
     std::stringstream in(ini_text);
 
-    P::specification_set spec_set(specs);
+    P::specification_map spec_map(specs);
     P::ini_importer importer{in, ctx};
     while (importer) {
-        auto h = importer.run_one(p, spec_set);
+        auto h = importer.run_one(p, spec_map);
         if (h && h.value()==P::ini_record_kind::section) {
             std::cout << "Checking section [" << importer.section() << "]\n";
         }

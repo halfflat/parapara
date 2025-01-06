@@ -10,15 +10,13 @@ Also: should we copy in the backport::exception unit tests?
 
 ### Support for writing to members of subobjects
 
-This is currently provided by delegating specifications
-for a subobject of a field to specifications defined for
-that field.
+This is currently provided by delegating specifications for a subobject
+of a field to specifications defined for that field.
 
-Possibility of adding mechanism for direct access to
-subobject members remains, but that might rely upon an
-implementation that relies upon implementation-defined
-behaviour (or even in theory UB if not in practice) due
-to some lacunae in the C++ spec regarding object
+Possibility of adding mechanism for direct access to subobject members
+remains, but that might rely upon an implementation that relies upon
+implementation-defined behaviour (or even in theory UB if not in
+practice) due to some lacunae in the C++ spec regarding object
 representations.
 
 ### Expand library of supplied read/write functions
@@ -28,44 +26,52 @@ explicitly or implicitly keyed sum types; pairs and tuples.
 
 ### Explicit handling of optional<X> fields
 
-Semantics for these fields is currently baked in. Is it better
-to treat them as regular values and delegate the representation
-responsibility to readers and writers?
+Semantics for these fields is currently baked in. Is it better to treat
+them as regular values and delegate the representation responsibility to
+readers and writers?
 
 There is currently no way to e.g. represent a field value of
-std::nullopt for such a field. For example, being able to
-have a parameter set by 'foo = default' or 'foo = nothing'
-may be desirable.
+std::nullopt for such a field. For example, being able to have a
+parameter set by 'foo = default' or 'foo = nothing' may be desirable.
 
-Perhaps some sort of fall-back process? i.e. use a specific
-optional<X> read function if present.
+Perhaps some sort of fall-back process? i.e. use a specific optional<X>
+read function if present.
+
+Proposed alternative to above: a `defaulted<T>` class designed to
+represent unset-value with fallback default values.
 
 ### Allow validators that modify the value?
 
 Currently they are accommodated, but there are no helper functions for
-constructing them. Should they be permitted? If so, document
-and provide support and helper functions for them. If not,
-remove support and consequently simplify the specification class
-and API.
+constructing them. Should they be permitted? If so, document and provide
+support and helper functions for them. If not, remove support and
+consequently simplify the specification class and API.
 
-### More validators
+### Handling of [section] in import, export
 
-Supply a few more simple validators, and maybe change the names
-of existing ones to be clearer.
+Sometimes may need to know if there is an emplicit but empty section;
+these can be represented e.g. by a specification for a field of type
+`parapara::section` that wraps bool.
+
+### Generic INI exporter
+
+INI style importer is generic, allowing more-or-less arbitrary INI-ish
+formats through an ini_record interface. Exporter should have sufficient
+facility to be able to do round trip import/export for these cases too.
 
 ## Medium priority
 
 ### Other representations
 
-Have at least a demo if not a supported implementation of using
-JSON objects (e.g. from nlohmann/json) as the external representation
-type, as opposed to std::string_view and std::string.
+Have at least a demo if not a supported implementation of using JSON
+objects (e.g. from nlohmann/json) as the external representation type,
+as opposed to std::string_view and std::string.
 
 ### Generalizing assignment
 
 Instead of always overwriting any fields in the parameter-storing
-structure, readers could instead do one of the following based on
-a per-parameter or per-parameter-set policy:
+structure, readers could instead do one of the following based on a
+per-parameter or per-parameter-set policy:
 
  * Replace (current default)
  * Replace default or ignore (if existing valus is default-constructed
@@ -78,14 +84,14 @@ reduction).
 
 ### Locale-aware vs locale-agnostic readers/writers
 
-Currently, deliberately using charconv for numeric represenations
-to avoid any locale dependencies and to get some round-trip gurarantees.
+Currently, deliberately using charconv for numeric represenations to
+avoid any locale dependencies and to get some round-trip gurarantees.
 Compare though with tinyopt, which deliberarely uses std::iostream
 formatted read/writes to reflect the user environment locale.
 
 Could supply a set of readers/writers based on these too, optionally
-with an explicit locale, giving applications an easy choice between
-the two.
+with an explicit locale, giving applications an easy choice between the
+two.
 
 ## Low priority
 
