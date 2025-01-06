@@ -51,7 +51,7 @@ int main(int, char**) {
 
     std::cout << "\nusing specification set:\n\n";
 
-    P::specification_set<params> S(specs);
+    P::specification_map<params> S(specs);
     P::writer W = P::default_writer();
 
     auto report = [&S, &W](const params& rec, const P::failure& error) {

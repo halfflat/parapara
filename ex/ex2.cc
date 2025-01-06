@@ -28,10 +28,10 @@ int main(int, char** argv) {
     };
 
     auto munge = [](std::string_view s) -> std::string { return s=="quux"? "bar"s: std::string(s); };
-    P::specification_set specset(specs, munge);
+    P::specification_map spec_map(specs, munge);
 
     for (int i = 1; argv[i]; ++i) {
-        auto h = import_k_eq_v(p, specset, R, argv[i]);
+        auto h = import_k_eq_v(p, spec_map, R, argv[i]);
         if (!h) {
             parapara::failure f = h.error();
             f.ctx.source = "argv[" + std::to_string(i) + "]";

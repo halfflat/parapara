@@ -1127,11 +1127,11 @@ std::vector<failure> validate(const Record& record, const C& specs) {
 // canonicalizer.
 
 template <typename Record>
-struct specification_set {
-    specification_set() = default;
+struct specification_map {
+    specification_map() = default;
 
     template <typename C, std::enable_if_t<std::is_assignable_v<specification<Record>&, value_type_t<C>>, int> = 0>
-    specification_set(const C& specs, std::function<std::string (std::string_view)> cify = {}):
+    specification_map(const C& specs, std::function<std::string (std::string_view)> cify = {}):
         canonicalize_(cify)
     {
         for (specification<Record> s: specs) insert(std::move(s));
@@ -1171,7 +1171,7 @@ struct specification_set {
         else return unrecognized_key(key);
     }
 
-    // Can also do the validation operation above from a specification_set.
+    // Can also do the validation operation above from a specification_map.
     std::vector<failure> validate(const Record& record) const {
         std::vector<failure> failures;
         for (const auto& [_, spec]: set_) {
@@ -1186,10 +1186,10 @@ private:
 };
 
 template <typename X>
-specification_set(X&) -> specification_set<typename value_type_t<X>::record_type>;
+specification_map(X&) -> specification_map<typename value_type_t<X>::record_type>;
 
 template <typename X>
-specification_set(X&, std::function<std::string (std::string_view)>) -> specification_set<typename value_type_t<X>::record_type>;
+specification_map(X&, std::function<std::string (std::string_view)>) -> specification_map<typename value_type_t<X>::record_type>;
 
 
 // V. Validation helpers
@@ -1308,7 +1308,7 @@ auto operator&=(V1 v1, V2 v2) {
 // or key/key-value records.
 
 template <typename Record>
-hopefully<void> import_k_eq_v(Record &rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
+hopefully<void> import_k_eq_v(Record &rec, const specification_map<Record>& specs, const reader<std::string_view>& rdr,
                               std::string_view text, std::string eq_token = "=")
 {
     constexpr auto npos = std::string_view::npos;
@@ -1338,7 +1338,7 @@ hopefully<void> import_k_eq_v(Record &rec, const specification_set<Record>& spec
 
 
 template <typename Record>
-hopefully<void> import_k_eq_v(Record &rec, const specification_set<Record>& specs,
+hopefully<void> import_k_eq_v(Record &rec, const specification_map<Record>& specs,
                               std::string_view text, std::string eq_token = "=")
 {
     return import_k_eq_v(rec, specs, default_reader(), text, eq_token);
@@ -1446,7 +1446,7 @@ struct ini_style_importer {
 
     // Run run_once until eof or error.
     template <typename Record>
-    hopefully<void> run(Record& rec, const specification_set<Record>& specs,
+    hopefully<void> run(Record& rec, const specification_map<Record>& specs,
                         const reader<std::string_view>& rdr, std::string secsep = "/")
     {
         while (*this) {
@@ -1457,7 +1457,7 @@ struct ini_style_importer {
     }
 
     template <typename Record>
-    hopefully<void> run(Record& rec, const specification_set<Record>& specs, std::string secsep = "/") {
+    hopefully<void> run(Record& rec, const specification_map<Record>& specs, std::string secsep = "/") {
         return run(rec, specs, default_reader(), secsep);
     }
 
@@ -1468,7 +1468,7 @@ struct ini_style_importer {
     // Otherwise return a failure based on the current context.
 
     template <typename Record>
-    hopefully<ini_record_kind> run_one(Record& rec, const specification_set<Record>& specs,
+    hopefully<ini_record_kind> run_one(Record& rec, const specification_map<Record>& specs,
                                        const reader<std::string_view>& rdr, std::string secsep = "/")
     {
         separator_ = std::move(secsep);
@@ -1529,7 +1529,7 @@ struct ini_style_importer {
     }
 
     template <typename Record>
-    hopefully<ini_record_kind> run_one(Record& rec, const specification_set<Record>& specs, std::string secsep = "/") {
+    hopefully<ini_record_kind> run_one(Record& rec, const specification_map<Record>& specs, std::string secsep = "/") {
         return run_one(rec, specs, default_reader(), secsep);
     }
 
@@ -1545,13 +1545,13 @@ private:
 using ini_importer = ini_style_importer<simple_ini_parser>;
 
 template <typename Record>
-hopefully<void> import_ini(Record& rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
+hopefully<void> import_ini(Record& rec, const specification_map<Record>& specs, const reader<std::string_view>& rdr,
                            std::istream& in, source_context ctx, std::string secsep = "/") {
     return ini_importer{in, std::move(ctx)}.run(rec, specs, rdr, secsep);
 }
 
 template <typename Record>
-hopefully<void> import_ini(Record& rec, const specification_set<Record>& specs, const reader<std::string_view>& rdr,
+hopefully<void> import_ini(Record& rec, const specification_map<Record>& specs, const reader<std::string_view>& rdr,
                            std::istream& in, std::string secsep = "/") {
     return ini_importer{in}.run(rec, specs, rdr, secsep);
 }

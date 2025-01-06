@@ -139,7 +139,7 @@ ini_record custom_ini_parser(std::string_view v) {
 
 // Use a custom line-by-line ini importer to handle relative section headings
 template <typename Record>
-P::hopefully<void> custom_import_ini(Record& rec, const P::specification_set<Record>& specs, std::istream& in)
+P::hopefully<void> custom_import_ini(Record& rec, const P::specification_map<Record>& specs, std::istream& in)
 {
     constexpr auto npos = std::string_view::npos;
 
@@ -204,8 +204,8 @@ int main(int, char**) {
     ctx.source = "ini_text";
     std::stringstream in(ini_text);
 
-    P::specification_set spec_set(specs);
-    custom_import_ini(p, spec_set, in);
+    P::specification_map spec_map(specs);
+    custom_import_ini(p, spec_map, in);
 
     std::cout << "Record values by key:\n";
     for (const auto& s: specs) {

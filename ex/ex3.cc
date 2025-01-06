@@ -55,10 +55,10 @@ int main(int, char**) {
         {"blurgle.quux", &params::quux, ""}
     };
 
-    P::specification_set specset(specs, parapara::keys_lc_nows);
+    P::specification_map spec_map(specs, parapara::keys_lc_nows);
 
     std::stringstream in(ini_text);
-    auto h = import_ini(p, specset, R, in, ".");
+    auto h = import_ini(p, spec_map, R, in, ".");
     if (!h) {
         h.error().ctx.source = "<ini_text>";
         std::cout << explain(h.error(), true) << "\n";
