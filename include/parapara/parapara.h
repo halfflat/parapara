@@ -1244,11 +1244,11 @@ auto less_than(Value v, std::string constraint = "value less than upper bound") 
     return validator([v = std::move(v)](auto x) { return x<v; }, std::move(constraint));
 }
 
-auto nonzero(std::string constraint = "value must be non-zero") {
+auto inline nonzero(std::string constraint = "value must be non-zero") {
     return validator([](auto x) { return x!=0; }, std::move(constraint));
 }
 
-auto nonempty(std::string constraint = "value must be non-empty") {
+auto inline nonempty(std::string constraint = "value must be non-empty") {
     return validator([](auto x) { return !x.empty(); }, std::move(constraint));
 }
 
