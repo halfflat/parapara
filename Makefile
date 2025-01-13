@@ -6,7 +6,7 @@ top:=$(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 examples:=ex1 ex2 ex3 ex4 ex5 ex6
 all:: unit $(examples) man
 
-test-src:=unit.cc test_failure.cc test_utility.cc test_reader.cc
+test-src:=unit.cc test_failure.cc test_utility.cc test_reader.cc test_defaulted.cc
 
 all-src:=$(test-src) $(patsubst %, %.cc, $(examples))
 all-obj:=$(patsubst %.cc, %.o, $(all-src))

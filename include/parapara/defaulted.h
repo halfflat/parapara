@@ -1,7 +1,10 @@
 #pragma once
 
+#include <initializer_list>
 #include <optional>
 #include <utility>
+
+namespace parapara {
 
 template <typename T>
 struct defaulted;
@@ -16,10 +19,10 @@ struct is_defaulted_<defaulted<T>>: std::true_type {};
 
 }
 
-tempalate <typename T>
+template <typename T>
 using is_defaulted = detail::is_defaulted_<std::remove_cv_t<std::remove_reference_t<T>>>;
 
-tempalate <typename T>
+template <typename T>
 inline constexpr bool  is_defaulted_v = is_defaulted<T>::value;
 
 template <typename T>
@@ -35,7 +38,12 @@ struct defaulted {
 
     template <typename... As>
     explicit defaulted(std::in_place_t, As&&... as):
-        defaulted_(std::forward<As>(as)...)
+        default_(std::forward<As>(as)...)
+    {}
+
+    template <typename U, typename... As>
+    explicit defaulted(std::in_place_t, std::initializer_list<U> il, As&&... as):
+        default_(il, std::forward<As>(as)...)
     {}
 
     // Construct with default value of compatible type.
@@ -44,7 +52,7 @@ struct defaulted {
         std::enable_if_t<!is_defaulted_v<U>, int> = 0,
         std::enable_if_t<std::is_constructible_v<T, U&&>, int> = 0
     >
-    explicit defaulted(U&& u) noexcept(std::is_nothrow_constructible_v<T, U&&>: default_(std::forward<U>(u)) {}
+    explicit defaulted(U&& u) noexcept(std::is_nothrow_constructible_v<T, U&&>): default_(std::forward<U>(u)) {}
 
     // Copy from defaulted<U> of compatible type.
 
@@ -57,7 +65,7 @@ struct defaulted {
     {}
 
     template <typename U,
-        std::enable_if_t<!std::is_convertible_v<U, T>, int> = 0
+        std::enable_if_t<!std::is_convertible_v<U, T>, int> = 0,
         std::enable_if_t<std::is_constructible_v<T, U>, int> = 0
     >
     explicit defaulted(const defaulted<U>& du) noexcept(std::is_nothrow_constructible_v<T, U>):
@@ -70,16 +78,16 @@ struct defaulted {
     template <typename U,
         std::enable_if_t<std::is_convertible_v<U, T>, int> = 0
     >
-    defaulted(defaulted<U>&& du) noexcept(std::is_nothrow_move_constructible_v<T, U>):
+    defaulted(defaulted<U>&& du) noexcept(std::is_nothrow_constructible_v<T, U&&>):
         assigned_(std::move(du.assigned_)),
         default_(std::move(du.default_))
     {}
 
     template <typename U,
-        std::enable_if_t<!std::is_convertible_v<U, T>, int> = 0
-        std::enable_if_t<std::is_move_constructible_v<T, U>, int> = 0
+        std::enable_if_t<!std::is_convertible_v<U, T>, int> = 0,
+        std::enable_if_t<std::is_constructible_v<T, U&&>, int> = 0
     >
-    explicit defaulted(defaulted<U>&& du) noexcept(std::is_nothrow_move_constructible_v<T, U>):
+    explicit defaulted(defaulted<U>&& du) noexcept(std::is_nothrow_constructible_v<T, U&&>):
         assigned_(std::move(du.assigned_)),
         default_(std::move(du.default_))
     {}
@@ -87,7 +95,7 @@ struct defaulted {
     // Assignment from value.
 
     template <typename U,
-        std::enable_if_t<!is_defaulted_v<U>, int> = 0>
+        std::enable_if_t<!is_defaulted_v<U>, int> = 0,
         std::enable_if_t<std::is_assignable_v<T, U&&>, int> = 0
     >
     defaulted<T>& operator=(U&& u) {
@@ -133,10 +141,17 @@ struct defaulted {
         assigned_.emplace(std::forward<As>(as)...);
     }
 
+    template <typename U, typename... As,
+        std::enable_if_t<std::is_constructible_v<T, std::initializer_list<U>&, As&&...>, int> = 0
+    >
+    void emplace(std::initializer_list<U> il, As&&... as) {
+        assigned_.emplace(il, std::forward<As>(as)...);
+    }
+
     template <typename... As>
     void emplace_default(As&&... as) {
         default_.~T();
-        ::new ((void*)&default) T(std::forward<As>(as)...);
+        ::new ((void*)&default_) T(std::forward<As>(as)...);
     }
 
     template <typename U, typename... As,
@@ -144,7 +159,7 @@ struct defaulted {
     >
     void emplace_default(std::initializer_list<U> il, As&&... as) {
         default_.~T();
-        ::new ((void*)&default) T(il, std::forward<As>(as)...);
+        ::new ((void*)&default_) T(il, std::forward<As>(as)...);
     }
 
     // Check assignment status
@@ -153,3 +168,4 @@ struct defaulted {
     constexpr bool is_default() const { return !is_assigned(); }
 };
 
+} // namespace parapara
