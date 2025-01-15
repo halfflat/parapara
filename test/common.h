@@ -66,8 +66,10 @@ struct counted {
     friend void swap(counted& a, counted& b) noexcept(std::is_nothrow_swappable_v<X>) { a.swap(b); }
 
     static void reset() {
-        n_copy_ctor = n_move_ctor = 0;
-        n_copy_assign = n_move_assign = 0;
+        n_copy_ctor =0;
+        n_move_ctor = 0;
+        n_copy_assign = 0;
+        n_move_assign = 0;
         n_swaps = 0;
     }
 

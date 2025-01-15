@@ -24,7 +24,7 @@ vpath %.7 $(top)man
 
 CXXSTD?=c++17
 OPTFLAGS?=-O2 -march=native
-#OPTFLAGS?=-fsanitize=address -march=native
+OPTFLAGS?=-fsanitize=address -march=native
 CXXFLAGS+=$(OPTFLAGS) -MMD -MP -std=$(CXXSTD) -pedantic -Wall -Wextra -g -pthread
 CPPFLAGS+=-isystem $(gtest-inc) -I $(top)include
 
@@ -75,7 +75,7 @@ man/man3/parapara\:\:%.3: %.3
 
 # man(3type) parapara:: types
 
-man3type-pages:=expected.3type failure.3type hopefully.3type
+man3type-pages:=expected.3type failure.3type hopefully.3type defaulted.3type
 man3type-targets:=$(patsubst %, man/man3type/parapara\:\:%, $(man3type-pages))
 
 man3type:: ; mkdir -p man/man3type
