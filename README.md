@@ -1,10 +1,7 @@
 # Parapara
 
-Parapara is a C++ header library designed to read, parse, and write sets of parameters corresponding to
-fieleds within some struct. It is a proof of concept — it might become a useful standalone library in
-the fullness of time, but for now it is a testbed for use in a different application.
-
-Targets C++17 or maybe C++20 if the lack of concepts becomes too annoying.
+Parapara is a C++17-compatible header library designed to read, parse, and write sets of parameters corresponding to
+fieleds within some struct. It is very much still under development.
 
 ## Design goals
 
@@ -26,6 +23,4 @@ Targets C++17 or maybe C++20 if the lack of concepts becomes too annoying.
 
 ## Supported formats
 
-In the first instance, only a simple TOML-like subset that is compatible with the target application's
-conventions.
-
+In the first instance, only an INI-style file format is supported with a specialized importer.

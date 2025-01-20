@@ -24,22 +24,6 @@ representations.
 In particular, keywords representing a fixed set of values/enums;
 explicitly or implicitly keyed sum types; pairs and tuples.
 
-### Explicit handling of optional<X> fields
-
-Semantics for these fields is currently baked in. Is it better to treat
-them as regular values and delegate the representation responsibility to
-readers and writers?
-
-There is currently no way to e.g. represent a field value of
-std::nullopt for such a field. For example, being able to have a
-parameter set by 'foo = default' or 'foo = nothing' may be desirable.
-
-Perhaps some sort of fall-back process? i.e. use a specific optional<X>
-read function if present.
-
-Proposed alternative to above: a `defaulted<T>` class designed to
-represent unset-value with fallback default values.
-
 ### Allow validators that modify the value?
 
 Currently they are accommodated, but there are no helper functions for

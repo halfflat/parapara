@@ -114,13 +114,15 @@ The default value associated with a `defaulted<T>` object can be retrieved and m
 ## Assignment
 
 **template <typename U> defaulted<T>& operator=(U&&)**
- ~ TODO
+ ~ Assign a value (not of type defaulted<U> for some U), setting the assigned state.
 
 **template <typename U> defaulted<T>& operator=(const defaulted<U>&)**
- ~ TODO
+ ~ If the argument is in the assigned state, copy (if not already assigned) or copy-assign the assigned value of the argument and set the assigned state.
+Otherwise clear the assigned state and destroy any assigned value.
 
 **template <typename U> defaulted<T>& operator=(defaulted<U>&&)**
- ~ TODO
+ ~ If the argument is in the assigned state, move (if not already assigned) or move-assign the assigned value of the argument and set the assigned state.
+Otherwise clear the assigned state and destroy any assigned value.
 
 ## Value access
 

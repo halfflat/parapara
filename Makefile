@@ -3,7 +3,7 @@
 
 top:=$(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 
-examples:=ex1 ex2 ex3 ex4 ex5 ex6
+examples:=ex1 ex2 ex3 ex4 ex5 ex6 ex-defaulted
 all:: unit $(examples) man
 
 test-src:=unit.cc test_failure.cc test_utility.cc test_reader.cc test_defaulted.cc
