@@ -1775,9 +1775,10 @@ struct ini_style_importer {
         while (in_) {
             std::getline(in_, ctx_.record);
             ++ctx_.nr;
-            auto [kind, tokens] = parser_(std::string_view(ctx_.record));
+            ini_record ir = parser_(std::string_view(ctx_.record));
+            auto& tokens = ir.tokens;
 
-            switch (kind) {
+            switch (ir.kind) {
             case ini_record_kind::section:
                 section_ = tokens[0].first;
                 ctx_.cindex = tokens[0].second;
