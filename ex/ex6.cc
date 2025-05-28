@@ -183,7 +183,8 @@ int main(int, char**) {
     struct params {
         int a = 0;
         std::string b;
-        bool top = false;
+        P::section_t top;
+        P::section_t top_sub_subsub;
         int top_a = 0;
         int top_sub_a = 0;
         int top_sub_subsub_a = 0;
@@ -196,6 +197,7 @@ int main(int, char**) {
         {"top", &params::top},
         {"top/a", &params::top_a},
         {"top/sub/a", &params::top_sub_a},
+        {"top/sub/subsub", &params::top_sub_subsub},
         {"top/sub/subsub/a", &params::top_sub_subsub_a},
         {"top/sub2/a", &params::top_sub2_a}
     };
@@ -211,4 +213,7 @@ int main(int, char**) {
     for (const auto& s: specs) {
         std::cout << s.key << '\t' << s.write(p).value() << '\n';
     }
+
+    std::cout << "\nRecord values as (default) ini\n";
+    export_ini(p, specs, P::default_writer(), std::cout);
 }

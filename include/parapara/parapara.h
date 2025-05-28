@@ -44,7 +44,7 @@ constexpr inline int version_patch = 2;
 //
 // Section II: Reader and writer classes
 //
-// Section III: Specialised value types for use with parapara: defaulted<T>
+// Section III: Specialised value types for use with parapara: defaulted<T>; section_t.
 //
 // Section IV: Reader and writer helper functions, default reader and writer
 //
@@ -285,7 +285,8 @@ struct failure {
         unsupported_type,
         unrecognized_key,
         bad_syntax,
-        empty_optional
+        empty_optional,
+        not_a_flag,
     } error = internal_error;
 
     source_context ctx;
@@ -322,6 +323,11 @@ inline auto bad_syntax(source_context ctx = {}) {
 inline auto empty_optional(std::string_view key = {}, source_context ctx = {}) {
     if (!key.empty()) ctx.key = std::string(key);
     return unexpected(failure{failure::empty_optional, std::move(ctx), {}});
+}
+
+inline auto not_a_flag(std::string_view key = {}, source_context ctx = {}) {
+    if (!key.empty()) ctx.key = std::string(key);
+    return unexpected(failure{failure::not_a_flag, std::move(ctx), {}});
 }
 
 // manipulate context within failure
@@ -364,6 +370,12 @@ inline std::string explain(const failure& f, bool long_format = false) {
         break;
     case failure::bad_syntax:
         x << "bad syntax";
+        break;
+    case failure::empty_optional:
+        x << "empty optional";
+        break;
+    case failure::not_a_flag:
+        x << "not a flag";
         break;
     case failure::internal_error:
     default:
@@ -656,8 +668,8 @@ struct writer {
     }
 };
 
-// III. Specialised value types for use with parapara: defaulted<T>
-// ================================================================
+// III. Specialised value types for use with parapara: defaulted<T>; section_t.
+// ==========================================================================
 
 // defaulted<X> represents a value which is either one that is assigned or emplaced, or else a default value set
 // at initialization.
@@ -873,6 +885,21 @@ public:
     constexpr bool is_default() const { return !is_assigned(); }
 };
 
+// The section_t type represents the presence of a specific section heading in a representation.
+// It wraps a bool value, defaulting to false.
+
+struct section_t {
+    bool value = false;
+
+    section_t() = default;
+    explicit section_t(bool v): value(v) {}
+
+    section_t& operator=(const section_t&) = default;
+    section_t& operator=(bool b) { value = b; return *this; }
+
+    operator bool() const { return value; }
+};
+
 
 // IV. Reader/writer helpers, default reader and writer definitions
 // =================================================================
@@ -913,6 +940,12 @@ inline hopefully<bool> read_bool_alpha(std::string_view v) {
     if (v=="true") return true;
     else if (v=="false") return false;
     else return read_failure();
+}
+
+// - Read section_t as a boolean
+
+inline hopefully<section_t> read_section_t(std::string_view v, const reader<std::string_view>& rdr) {
+    return rdr.read<bool>(v).transform([](bool b) { return section_t{b}; });
 }
 
 // - Read a delimitter-separated list of items, without delimiter escapes;
@@ -1028,6 +1061,12 @@ inline hopefully<std::string> write_bool_alpha(bool v) {
     return v? "true": "false";
 }
 
+// - Write section_t as its boolean value
+
+inline hopefully<std::string> write_section_t(section_t v, const writer<std::string>& wtr) {
+    return wtr.write(v.value);
+}
+
 // - Write a delimitter-separated list of items, without delimiter escapes; C represents a container type.
 
 template <typename C,
@@ -1094,6 +1133,7 @@ struct write_defaulted {
 //    * Boolean, using "true" for true and "false" for false.
 //    * Vectors of the standard arithmetic types, represented as comma-separated values.
 //    * defaulted<X> for the standard arithmetic types X and boolean, with unassigned represented by the empty string.
+//    * section_t, represented as a boolean value as above.
 //    * std::string, represented verbatim.
 
 namespace detail {
@@ -1112,6 +1152,7 @@ inline reader<std::string_view> make_default_reader() {
         read_cc<double>,
         read_cc<long double>,
         read_bool_alpha,
+        read_section_t,
         read_dsv<std::vector<short>>{},
         read_dsv<std::vector<unsigned short>>{},
         read_dsv<std::vector<int>>{},
@@ -1162,6 +1203,7 @@ inline writer<std::string> make_default_writer() {
         write_cc<double>,
         write_cc<long double>,
         write_bool_alpha,
+        write_section_t,
         write_dsv<std::vector<short>>{},
         write_dsv<std::vector<unsigned short>>{},
         write_dsv<std::vector<int>>{},
@@ -1230,6 +1272,15 @@ using base_field_t = typename detail::base_field<std::remove_cv_t<X>>::type;
 template <typename X>
 constexpr bool is_optional_v = detail::is_optional_<std::remove_cv_t<X>>::value;
 
+// A specification<R> object captures one parameter (as represented by a field in
+// a struct or class of type R), together with a key, validator function, and description.
+//
+// It can also represent parameters that are subobjects of a field of struct or
+// class type F by delegation to another specification object of type specification<F>.
+//
+// The parameter in a given record is accessed via a type-erased interface given by
+// the methods read, write, assign, set, reset, retrieve, and validate (see below).
+
 template <typename Record>
 struct specification {
     using record_type = Record;
@@ -1267,6 +1318,20 @@ struct specification {
                 }
                 else {
                     return internal_error();
+                }
+            }),
+        set_impl_(
+            [validate = validate_impl_, field_ptr = field_ptr] (Record& record, bool bool_value) -> hopefully<void>
+            {
+                using B = base_field_t<Field>;
+                if constexpr (std::is_assignable_v<B, bool>) {
+                    B value;
+                    value = bool_value;
+                    return validate(const_cast<const B*>(&value)).transform(
+                        [&record, field_ptr](std::any x) { record.*field_ptr = std::any_cast<B>(std::move(x)); });
+                }
+                else {
+                    return not_a_flag();
                 }
             }),
         retrieve_impl_(
@@ -1307,6 +1372,11 @@ struct specification {
             {
                 return delegate_assign_impl(record.*field_ptr, value);
             }),
+        set_impl_(
+            [field_ptr = field_ptr, delegate_set_impl = delegate.set_impl_] (Record& record, bool bool_value) -> hopefully<void>
+            {
+                return delegate_set_impl(record.*field_ptr, bool_value);
+            }),
         retrieve_impl_(
             [field_ptr = field_ptr, delegate_retrieve_impl = delegate.retrieve_impl_] (const Record& record) -> any_ptr {
                 return delegate_retrieve_impl(record.*field_ptr);
@@ -1346,6 +1416,17 @@ struct specification {
         return assign_impl_(record, value).transform_error(with_ctx_key(key));
     }
 
+    // Convert boolean argument to a value of type Field via assignment if possible; validate and assign to field in record.
+    // If not possible, return a not_a_flag failure.
+
+    hopefully<void> set(Record& record, bool bool_value = true) const {
+        return set_impl_(record, bool_value).transform_error(with_ctx_key(key));
+    }
+
+    // Equivalet to set(record, false).
+
+    hopefully<void> reset(Record& record) const { return set(record, false); }
+
     // Return const pointer to the value of the field in record as an any_ptr.
     // A field with an empty optional value will generate an empty_optional failure.
 
@@ -1368,9 +1449,12 @@ private:
     // Given a field type B or optional<B>, cast any_ptr to const B*, run validation on corresponding value,
     // and return successful result in std::any.
     std::function<hopefully<std::any> (any_ptr)> validate_impl_;
-    //
+
     // Given a field type B or optional<B>, cast std::any value to B, validate, and assign to field of record object.
     std::function<hopefully<void> (Record &, std::any)> assign_impl_;
+
+    // Given a field type B or optional<B>, convert bool value to B by assignment, validate, and assign to field of record object.
+    std::function<hopefully<void> (Record &, bool)> set_impl_;
 
     // Given a field type B or optional<B>, return const B* pointer to field value wrapped in any_ptr.
     // Value is nullptr if field of type optional<B> is empty.
@@ -1466,6 +1550,11 @@ struct specification_map {
     template <typename Writer>
     hopefully<typename Writer::representation_type> write(const Record& record, std::string_view key, const Writer& wtr) const {
         if (auto specp = get_if(key)) return specp->write(record, wtr);
+        else return unrecognized_key(key);
+    }
+
+    hopefully<void> set(Record& record, std::string_view key, bool bool_value = true) const {
+        if (auto specp = get_if(key)) return specp->set(record, bool_value);
         else return unrecognized_key(key);
     }
 
@@ -1565,7 +1654,11 @@ auto operator&=(V1 v1, V2 v2) {
 // import_k_eq_v:
 //
 //     Split one string (view) into two fields k, v separated by the first occurance of an equals sign
-//     (or separator as supplied). Assign corresponding field k of record from value v.
+//     (or separator as supplied). Assign corresponding field k of record from value v. If there is no
+//     separator (and thus no v), attempt to set field k of record to true.
+//
+//     If the field name k belongs to a section, as determined by the section separator (by default, '/'),
+//     set any corresponding section parameters to true.
 //
 // import_ini:
 //
@@ -1605,9 +1698,29 @@ auto operator&=(V1 v1, V2 v2) {
 // provide support for other INI-like formats comprising a sequence of records, one per line, that are either section headers
 // or key/key-value records.
 
+// For each prefix of the given key that is followed by a section separator, set the corresponding parameter
+// if that prefix is in the specification map and represents a parameter of type parapara::section.
+
 template <typename Record>
-hopefully<void> import_k_eq_v(Record &rec, const specification_map<Record>& specs, const reader<std::string_view>& rdr,
-                              std::string_view text, std::string eq_token = "=")
+hopefully<void> set_prefix_sections(Record& rec, const specification_map<Record>& specs, std::string_view key, std::string secsep = "/") {
+    if (secsep.empty()) return {};
+
+    for (std::size_t end = key.find(secsep); end!=std::string::npos; end = key.find(secsep, end+1)) {
+        std::string_view prefix = key.substr(0, end);
+        if (prefix.empty()) continue;
+
+        if (auto specp = specs.get_if(prefix); specp && specp->field_type==typeid(section_t)) {
+            if (auto h = specp->set(rec); !h) return h;
+        }
+    }
+
+    return {};
+}
+
+
+template <typename Record>
+hopefully<void> import_k_eq_v(Record& rec, const specification_map<Record>& specs, const reader<std::string_view>& rdr,
+                              std::string_view text, std::string eq_token = "=", std::string secsep = "/")
 {
     constexpr auto npos = std::string_view::npos;
     std::string_view key, value;
@@ -1618,20 +1731,30 @@ hopefully<void> import_k_eq_v(Record &rec, const specification_map<Record>& spec
     auto eq = text.find(eq_token);
     if (eq==npos) {
         key = text;
-        value = "true"; // special case boolean
+
+        set_prefix_sections(rec, specs, key, secsep);
+
+        return specs.set(rec, key).
+            transform_error([&](failure f) {
+                f.ctx.record = std::string(text);
+                f.ctx.cindex = 1;
+                return f;
+            });
     }
     else {
         key = text.substr(0, eq);
         value_pos = eq+1;
         value = text.substr(value_pos);
-    }
 
-    return specs.read(rec, key, value, rdr).
-        transform_error([&](failure f) {
-            f.ctx.record = std::string(text);
-            f.ctx.cindex = f.error==failure::unrecognized_key? 1: 1+value_pos;
-            return f;
-        });
+        set_parent_sections(rec, specs, key, secsep);
+
+        return specs.read(rec, key, value, rdr).
+            transform_error([&](failure f) {
+                f.ctx.record = std::string(text);
+                f.ctx.cindex = f.error==failure::unrecognized_key? 1: 1+value_pos;
+                return f;
+            });
+    }
 }
 
 
@@ -1784,8 +1907,8 @@ struct ini_style_importer {
                 ctx_.cindex = tokens[0].second;
 
                 if (auto sp = specs.get_if(section_)) {
-                    if (sp->field_type == typeid(bool)) {
-                        return sp->assign(rec, true).
+                    if (sp->field_type == typeid(section_t)) {
+                        return sp->set(rec).
                             transform([] { return ini_record_kind::section; }).
                             transform_error(with_ctx(ctx_));
                     }
@@ -1797,6 +1920,8 @@ struct ini_style_importer {
                 ctx_.key = section_.empty()? tokens[0].first: section_ + separator_ + tokens[0].first;
                 ctx_.cindex = tokens[0].second;
 
+                set_prefix_sections(rec, specs, ctx_.key, secsep);
+
                 return specs.read(rec, ctx_.key, "true", rdr).
                     transform([] { return ini_record_kind::key; }).
                     transform_error(with_ctx(ctx_));
@@ -1804,6 +1929,8 @@ struct ini_style_importer {
             case ini_record_kind::key_value:
                 ctx_.key = section_.empty()? tokens[0].first: section_ + separator_ + tokens[0].first;
                 ctx_.cindex = tokens[0].second;
+
+                set_prefix_sections(rec, specs, ctx_.key, secsep);
 
                 return specs.read(rec, ctx_.key, tokens[1].first, rdr).
                     transform([] { return ini_record_kind::key_value; }).
@@ -1873,7 +2000,15 @@ hopefully<void> export_ini(
         std::string section;
         std::string_view key(spec.key);
 
-        if (auto j = key.find(secsep); j!=npos) {
+        if (spec.field_type==typeid(section_t)) {
+            if (hopefully<any_ptr> h = spec.retrieve(record); h) {
+                const section_t* v = h.value().as<const section_t*>();
+                if (v && *v) section_content.emplace(section, std::stringstream{});
+            }
+            continue;
+        }
+
+        if (auto j = key.rfind(secsep); j!=npos) {
             section = key.substr(0, j);
             key.remove_prefix(j+1);
         }
