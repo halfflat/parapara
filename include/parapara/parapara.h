@@ -1073,7 +1073,7 @@ struct write_defaulted {
     std::function<hopefully<std::string> (const X&)> write_field; // if empty, use supplied reader
     const std::string unassigned_repn = "";
 
-    explicit write_defaulted(std::function<hopefully<std::string> (const X&)> wrfite_field, std::string unassigned_repn = ""):
+    explicit write_defaulted(std::function<hopefully<std::string> (const X&)> write_field, std::string unassigned_repn = ""):
         write_field(std::move(write_field)), unassigned_repn(std::move(unassigned_repn))
     {}
 
@@ -1305,7 +1305,7 @@ struct specification {
         assign_impl_(
             [field_ptr = field_ptr, delegate_assign_impl = delegate.assign_impl_] (Record& record, std::any value) -> hopefully<void>
             {
-                return delegate_assign_impl(record.*field_ptr, value);
+                return delegate_assign_impl(record.*field_ptr, std::move(value));
             }),
         retrieve_impl_(
             [field_ptr = field_ptr, delegate_retrieve_impl = delegate.retrieve_impl_] (const Record& record) -> any_ptr {
@@ -1343,7 +1343,7 @@ struct specification {
     // Given a std::any object holding a value of the field type, validate and assign to field in record.
 
     hopefully<void> assign(Record& record, std::any value) const {
-        return assign_impl_(record, value).transform_error(with_ctx_key(key));
+        return assign_impl_(record, std::move(value)).transform_error(with_ctx_key(key));
     }
 
     // Return const pointer to the value of the field in record as an any_ptr.
