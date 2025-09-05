@@ -10,6 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <string_view>
 #include <typeindex>
 #include <unordered_map>
