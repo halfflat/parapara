@@ -2,6 +2,10 @@
 #include <gtest/gtest.h>
 #include <parapara/parapara.h>
 
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wunneeded-internal-declaration"
+#endif
+
 using namespace parapara;
 
 TEST(parapara, any_ptr) {
