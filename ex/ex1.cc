@@ -17,7 +17,7 @@ int main() {
 
     parapara::reader S(
         parapara::default_reader(),
-        parapara::read_dsv<std::list<double>>(parapara::read_cc<double>, ";")
+        parapara::read_dsv<std::list<double>>(parapara::read_numeric<double>, ";")
     );
 
     std::string repn2 = "23.4; 178.9; NaN; inf";

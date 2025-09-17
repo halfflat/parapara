@@ -878,6 +878,47 @@ public:
 // IV. Reader/writer helpers, default reader and writer definitions
 // =================================================================
 
+// - Fallback read_numeric implementation to work around partial charconv support
+
+template <typename T>
+hopefully<T> read_numeric_fallback(std::string_view v) {
+    std::string s(v);
+    std::size_t p;
+
+    try {
+        if constexpr (std::is_same_v<float, T>) return std::stof(s, &p);
+        else if constexpr (std::is_same_v<double, T>) return std::stod(s, &p);
+        else if constexpr (std::is_same_v<long double, T>) return std::stold(s, &p);
+        else if constexpr (std::is_same_v<short, T>) {
+            int x = std::stoi(s, &p);
+            if (x<std::numeric_limits<int>::min() || x>std::numeric_limits<int>::max()) return invalid_value();
+            return x;
+        }
+        else if constexpr (std::is_same_v<int, T>) return std::stoi(s, &p);
+        else if constexpr (std::is_same_v<long, T>) return std::stol(s, &p);
+        else if constexpr (std::is_same_v<long long, T>) return std::stoll(s, &p);
+        else if constexpr (std::is_same_v<unsigned short, T>) {
+            unsigned long x = std::stoul(s, &p);
+            if (x>std::numeric_limits<unsigned short>::max()) return invalid_value();
+            else return x;
+        }
+        else if constexpr (std::is_same_v<unsigned, T>) {
+            unsigned long x = std::stoul(s, &p);
+            if (x>std::numeric_limits<unsigned>::max()) return invalid_value();
+            else return x;
+        }
+        else if constexpr (std::is_same_v<unsigned long, T>) return std::stoul(s, &p);
+        else if constexpr (std::is_same_v<unsigned long long, T>) return std::stoull(s, &p);
+        else static_assert(!sizeof(T), "unsupported type for read_scalar_fallback");
+    }
+    catch (std::invalid_argument&) {
+        return read_failure();
+    }
+    catch (std::out_of_range&) {
+        return invalid_value();
+    }
+}
+
 // If C++20 is targetted instead of C++17, these ad hoc type traits and std::enable_if guards
 // can be replaced with concepts and requires clauses.
 
@@ -900,6 +941,14 @@ hopefully<T> read_cc(std::string_view v) {
     if (err==std::errc::result_out_of_range) return invalid_value();
     if (err!=std::errc() || p!=&v.front()+v.size()) return read_failure();
     return x;
+}
+
+// - Read a numeric value using std::from_chars if supported, else using read_numeric_fallback.
+
+template <typename T>
+hopefully<T> read_numeric(std::string_view v) {
+    if constexpr (can_from_chars_v<T>) return read_cc<T>(v);
+    else return read_numeric_fallback<T>(v);
 }
 
 // - Read a string, without any filters
@@ -995,6 +1044,20 @@ struct read_defaulted {
     }
 };
 
+// - Fallback write_numeric implementation to work around partial charconv support
+
+template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+hopefully<std::string> write_numeric_fallback(const T& v) {
+    std::ostringstream o;
+    o.imbue(std::locale::classic());
+    if constexpr (std::is_floating_point_v<T>) {
+        o.unsetf(std::ios_base::floatfield);
+        o << std::setprecision(std::numeric_limits<T>::max_digits10) << v;
+    }
+    else o << v;
+    return o.str();
+}
+
 // - Write a scalar value that is supported by std::to_chars.
 
 template <typename X, typename = void>
@@ -1006,15 +1069,39 @@ struct can_to_chars<X, std::void_t<decltype(std::to_chars((char *)0, (char *)0, 
 template <typename X>
 inline constexpr bool can_to_chars_v = can_to_chars<X>::value;
 
+namespace detail {
+
+constexpr unsigned ilog10(unsigned long long n) {
+    return n<10? 0: 1+ilog10(n/10);
+}
+
+template <typename F>
+constexpr unsigned fp_repn_bytes() {
+    constexpr int min_e10 = std::numeric_limits<F>::min_exponent10;
+    constexpr int max_e10 = std::numeric_limits<F>::max_exponent10;
+    return 4+std::numeric_limits<F>::max_digits10+1+ilog10(std::max(2, std::max(max_e10, min_e10<0? -min_e10: min_e10)));
+}
+
+} // namespace detail
+
 template <typename T, std::enable_if_t<can_to_chars_v<T>, int> = 0>
 hopefully<std::string> write_cc(const T& v) {
-    std::array<char, std::numeric_limits<T>::max_digits10+10> buf;
+    constexpr std::size_t buf_sz = std::is_floating_point_v<T>? detail::fp_repn_bytes<T>(): 2+std::numeric_limits<T>::digits10;
+    std::array<char, buf_sz> buf;
 
     auto [p, err] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
     if (err==std::errc())
         return std::string(buf.data(), p);
     else
-        return "error"; // probably can do better than this for error handling
+        return invalid_value();
+}
+
+// - Write a numeric value using std::to_chars if supported, else using write_numeric_fallback.
+
+template <typename T>
+hopefully<std::string> write_numeric(const T& v) {
+    if constexpr (can_to_chars_v<T>) return write_cc(v);
+    else return write_numeric_fallback(v);
 }
 
 // - Write a string, without any filters (very boring)
@@ -1101,17 +1188,17 @@ namespace detail {
 
 inline reader<std::string_view> make_default_reader() {
     return reader<std::string_view>(
-        read_cc<short>,
-        read_cc<unsigned short>,
-        read_cc<int>,
-        read_cc<unsigned int>,
-        read_cc<long>,
-        read_cc<unsigned long>,
-        read_cc<long long>,
-        read_cc<unsigned long long>,
-        read_cc<float>,
-        read_cc<double>,
-        read_cc<long double>,
+        read_numeric<short>,
+        read_numeric<unsigned short>,
+        read_numeric<int>,
+        read_numeric<unsigned int>,
+        read_numeric<long>,
+        read_numeric<unsigned long>,
+        read_numeric<long long>,
+        read_numeric<unsigned long long>,
+        read_numeric<float>,
+        read_numeric<double>,
+        read_numeric<long double>,
         read_bool_alpha,
         read_dsv<std::vector<short>>{},
         read_dsv<std::vector<unsigned short>>{},
@@ -1151,17 +1238,17 @@ namespace detail {
 
 inline writer<std::string> make_default_writer() {
     return writer<std::string>(
-        write_cc<short>,
-        write_cc<unsigned short>,
-        write_cc<int>,
-        write_cc<unsigned int>,
-        write_cc<long>,
-        write_cc<unsigned long>,
-        write_cc<long long>,
-        write_cc<unsigned long long>,
-        write_cc<float>,
-        write_cc<double>,
-        write_cc<long double>,
+        write_numeric<short>,
+        write_numeric<unsigned short>,
+        write_numeric<int>,
+        write_numeric<unsigned int>,
+        write_numeric<long>,
+        write_numeric<unsigned long>,
+        write_numeric<long long>,
+        write_numeric<unsigned long long>,
+        write_numeric<float>,
+        write_numeric<double>,
+        write_numeric<long double>,
         write_bool_alpha,
         write_dsv<std::vector<short>>{},
         write_dsv<std::vector<unsigned short>>{},
@@ -1363,7 +1450,7 @@ struct specification {
     }
 
     template <typename>
-    friend class specification;
+    friend struct specification;
 
 private:
     // Given a field type B or optional<B>, cast any_ptr to const B*, run validation on corresponding value,
@@ -1677,30 +1764,30 @@ struct simple_ini_parser {
 
             // check for malformed heading
             if (v[e]!=']') {
-                return {ini_record_kind::syntax_error, token{"", e}};
+                return {ini_record_kind::syntax_error, {token{"", e}}};
             }
 
-            return {ini_record_kind::section, token{v.substr(b+1,e-(b+1)), b+2}};
+            return {ini_record_kind::section, {token{v.substr(b+1,e-(b+1)), b+2}}};
         }
 
         // key without value?
         auto eq = v.find('=');
         if (eq==npos) {
             auto e = v.find_last_not_of(ws);
-            return {ini_record_kind::key, token{v.substr(b,e-b+1), b}};
+            return {ini_record_kind::key, {token{v.substr(b,e-b+1), b}}};
         }
         // key = value
         else {
             unsigned klen = eq==b? 0: v.find_last_not_of(ws, eq-1)+1-b;
 
             if (eq==v.length()-1) {
-                return {ini_record_kind::key_value, token{v.substr(b, klen), b+1}, token{"", v.length()}};
+                return {ini_record_kind::key_value, {token{v.substr(b, klen), b+1}, token{"", v.length()}}};
             }
             else {
                 unsigned vb = v.find_first_not_of(ws, eq+1);
                 unsigned vl = v.find_last_not_of(ws);
 
-                return {ini_record_kind::key_value, token{v.substr(b, klen), b+1}, token{v.substr(vb, vl+1-vb), vb+1}};
+                return {ini_record_kind::key_value, {token{v.substr(b, klen), b+1}, token{v.substr(vb, vl+1-vb), vb+1}}};
             }
         }
     }

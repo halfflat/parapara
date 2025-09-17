@@ -6,7 +6,7 @@ top:=$(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 examples:=ex1 ex2 ex3 ex4 ex5 ex6 ex-defaulted ex-map-wrapper
 all:: unit $(examples) man
 
-test-src:=unit.cc test_failure.cc test_utility.cc test_reader.cc test_defaulted.cc
+test-src:=unit.cc test_failure.cc test_utility.cc test_reader.cc test_rw_helpers.cc test_defaulted.cc
 
 all-src:=$(test-src) $(patsubst %, %.cc, $(examples))
 all-obj:=$(patsubst %.cc, %.o, $(all-src))
@@ -22,6 +22,7 @@ vpath %.3 $(top)man
 vpath %.3type $(top)man
 vpath %.7 $(top)man
 
+CP?=cp
 CXXSTD?=c++17
 OPTFLAGS?=-O2 -march=native
 OPTFLAGS?=-fsanitize=address -march=native
@@ -77,7 +78,7 @@ man/man3/parapara\:\:%.3: %.3.md
 	pandoc -f markdown -t man --standalone --lua-filter=$(top)/man/man-custom.lua -o $@ $<
 
 man/man3/parapara\:\:%.3: %.3
-	cp --update $< $@
+	$(CP) --update $< $@
 
 # man(3type) parapara:: types
 
@@ -91,7 +92,7 @@ man/man3type/parapara\:\:%.3type: %.3type.md
 	pandoc -f markdown -t man --standalone --lua-filter=$(top)/man/man-custom.lua -o $@ $<
 
 man/man3type/parapara\:\:%.3type: %.3type
-	cp --update $< $@
+	$(CP) --update $< $@
 
 # man(7) parapara concepts and overview
 

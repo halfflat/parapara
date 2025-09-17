@@ -52,19 +52,19 @@ ini_record custom_ini_parser(std::string_view v) {
         size_type e = v.find(']');
 
         // check for malformed heading
-        if (e==npos) return {ini_record_kind::syntax_error, token("", b+1)};
+        if (e==npos) return {ini_record_kind::syntax_error, {token("", b+1)}};
 
         if (e+1<v.length()) {
             auto epilogue = v.find_first_not_of(ws, e+1);
             if (epilogue!=npos && !comment_at(v, epilogue)) {
-                return {ini_record_kind::syntax_error, token("", epilogue)};
+                return {ini_record_kind::syntax_error, {token("", epilogue)}};
             }
         }
 
         b = v.find_first_not_of(ws, b+1);
         e = v.find_last_not_of(ws, e-1);
 
-        return {ini_record_kind::section, token(v.substr(b, e>=b? e+1-b: 0), b+1)};
+        return {ini_record_kind::section, {token(v.substr(b, e>=b? e+1-b: 0), b+1)}};
     }
 
     // expect key first, followed by ws and eol, =, or //.
@@ -73,7 +73,7 @@ ini_record custom_ini_parser(std::string_view v) {
 
     // key without value?
     if (j==npos || v[j]!='=') {
-        return {ini_record_kind::key, key_token};
+        return {ini_record_kind::key, {key_token}};
     }
 
     // skip to text after =, look for value
@@ -90,8 +90,8 @@ ini_record custom_ini_parser(std::string_view v) {
                 size_type end = v.find("//", j);
                 if (end!=npos) --end;
 
-                return {ini_record_kind::key_value, key_token,
-                        token{v.substr(j, v.find_last_not_of(ws, end)-j+1), value_cindex}};
+                return {ini_record_kind::key_value, {key_token,
+                        token{v.substr(j, v.find_last_not_of(ws, end)-j+1), value_cindex}}};
             }
             else {
                 // quoted value; take until next unescaped '
@@ -118,23 +118,23 @@ ini_record custom_ini_parser(std::string_view v) {
 
                 // unterminated quoted value or escaped eol?
                 if (epilogue==npos || esc) {
-                    return {ini_record_kind::syntax_error, token("", j)};
+                    return {ini_record_kind::syntax_error, {token("", j)}};
                 }
 
                 // extra stuff following value that is not a comment?
                 if (epilogue<v.length()) {
                     epilogue = v.find_first_not_of(ws, epilogue);
                     if (epilogue!=npos && !comment_at(v, epilogue)) {
-                        return {ini_record_kind::syntax_error, token("", epilogue)};
+                        return {ini_record_kind::syntax_error, {token("", epilogue)}};
                     }
                 }
 
-                return {ini_record_kind::key_value, key_token, token{value, value_cindex}};
+                return {ini_record_kind::key_value, {key_token, token{value, value_cindex}}};
             }
         }
     }
     // key with empty value
-    return {ini_record_kind::key_value, key_token, token{"", eq}};
+    return {ini_record_kind::key_value, {key_token, token{"", eq}}};
 }
 
 // Use a custom line-by-line ini importer to handle relative section headings
