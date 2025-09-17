@@ -24,3 +24,24 @@ fieleds within some struct. It is very much still under development.
 ## Supported formats
 
 In the first instance, only an INI-style file format is supported with a specialized importer.
+
+## Building tests and examples
+
+(To be expanded)
+
+Basic approach:
+```
+    mkdir b
+    cd b
+    ln -s ../Makefile .
+    make
+```
+
+The Makefile uses `CXX` for the C++ compiler, `CP` for the `cp` command, as well as other variables that
+can be used to customize the build (`CXXSTD`, `OPTFLAGS` — refer to Makefile).
+
+For a MacPorts environment with a modern clang++, GNU Make, and GNU Coreutils installed use:
+```
+    gmake CXX=clang++ CP=gcp
+```
+
