@@ -82,7 +82,9 @@ man/man3/parapara\:\:%.3: %.3
 
 # man(3type) parapara:: types
 
-man3type-pages:=expected.3type failure.3type hopefully.3type defaulted.3type
+man3type-pages:=\
+    bad_key_set.3type defaulted.3type expected.3type failure.3type hopefully.3type \
+    keyed_view.3type parapara_error.3type validation_failed.3type
 man3type-targets:=$(patsubst %, man/man3type/parapara\:\:%, $(man3type-pages))
 
 man3type:: ; mkdir -p man/man3type

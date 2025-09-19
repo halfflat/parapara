@@ -1,4 +1,5 @@
 #pragma once
+
 #include <any>
 #include <charconv>
 #include <functional>
@@ -49,7 +50,7 @@ constexpr inline int version_patch = 2;
 //
 // Section IV: Reader and writer helper functions, default reader and writer
 //
-// Section V: Parameter specifications, parameter sets
+// Section V: Parameter specifications, specification maps
 //
 // Section VI: Validation helpers
 //
@@ -434,7 +435,7 @@ inline constexpr bool is_hopefully_v = is_hopefully<T>::value;
 // Base exception class; other parapara exceptions derive from this.
 
 struct parapara_error: public std::runtime_error {
-    parapara_error(const std::string& message): std::runtime_error(message) {}
+    explicit parapara_error(const std::string& message): std::runtime_error(message) {}
 };
 
 // Thrown when creating parameter set with a duplicate or empty key after canonicalization
@@ -446,8 +447,14 @@ struct bad_key_set: parapara_error {
     std::string key; // offending key, if any, that caused a key collision.
 };
 
+// Thrown when assignment through a keyed_view fails validation
+
+struct validation_failed: parapara_error {
+    explicit validation_failed(const std::string& message): parapara_error(message) {}
+};
+
 // II. Reader and writer classes
-// ==============================
+// -----------------------------
 //
 // A reader object maintains a type-indexed collection of type-specific parsers;
 // the constructor and add method allows readers to be composed and extended with
@@ -658,7 +665,7 @@ struct writer {
 };
 
 // III. Specialised value types for use with parapara: defaulted<T>
-// ================================================================
+// ----------------------------------------------------------------
 
 // defaulted<X> represents a value which is either one that is assigned or emplaced, or else a default value set
 // at initialization.
@@ -876,7 +883,7 @@ public:
 
 
 // IV. Reader/writer helpers, default reader and writer definitions
-// =================================================================
+// ----------------------------------------------------------------
 
 // - Fallback read_numeric implementation to work around partial charconv support
 
@@ -1284,8 +1291,8 @@ inline const writer<std::string>& default_writer() {
     return s;
 }
 
-// IV: Parameter specifications, specification sets
-// ================================================
+// V. Parameter specifications, specification maps
+// -----------------------------------------------
 
 // Note that validators given to a specification do not need to be of type
 // parapara::validator<X> for some X.
@@ -1354,7 +1361,7 @@ struct specification {
                         [&record, field_ptr](std::any x) { record.*field_ptr = std::any_cast<B>(std::move(x)); });
                 }
                 else {
-                    return internal_error();
+                    return unsupported_type();
                 }
             }),
         retrieve_impl_(
@@ -1483,8 +1490,11 @@ inline std::string keys_lc_nows(std::string_view v) {
     return out;
 }
 
+template <typename X, typename = void>
+struct value_type { using type = void; };
+
 template <typename X>
-struct value_type { using type = typename X::value_type; };
+struct value_type<X, std::void_t<typename X::value_type>> { using type = typename X::value_type; };
 
 template <typename X, std::size_t N>
 struct value_type<X [N]> { using type = X; };
@@ -1506,7 +1516,7 @@ std::vector<failure> validate(const Record& record, const C& specs) {
     return failures;
 }
 
-// Specification sets comprise a collection of specifications over the same record type with unique keys
+// Specification maps comprise a collection of specifications over the same record type with unique keys
 // which optionally are first transformed into a canonical form by a supplied canonicalizer.
 //
 // They are constructed from an existing container or range of specifications together win an optional
@@ -1515,6 +1525,8 @@ std::vector<failure> validate(const Record& record, const C& specs) {
 template <typename Record>
 struct specification_map {
     specification_map() = default;
+    specification_map(const specification_map& other) = default;
+    specification_map(specification_map&& other) = default;
 
     template <typename C, std::enable_if_t<std::is_assignable_v<specification<Record>&, value_type_t<C>>, int> = 0>
     specification_map(const C& specs, std::function<std::string (std::string_view)> cify = {}):
@@ -1577,9 +1589,239 @@ specification_map(X&) -> specification_map<typename value_type_t<X>::record_type
 template <typename X>
 specification_map(X&, std::function<std::string (std::string_view)>) -> specification_map<typename value_type_t<X>::record_type>;
 
+// The keyed_view classes present (mutating or non-mutating) views of a record struct indexable
+// by keys defined in a specification_map.
+
+namespace detail {
+struct record_field_const_proxy {
+    explicit record_field_const_proxy(any_ptr p): p_(std::move(p)) {}
+
+    record_field_const_proxy(const record_field_const_proxy&) = delete;
+    record_field_const_proxy& operator=(const record_field_const_proxy&) = delete;
+
+    // Restrict methods to rvalues so that the proxy object cannot easily be used
+    // outside the expression in which it is instantiated.
+
+    template <typename X> const X& as() const && { return deref<X>(); }
+    template <typename X> operator X() const && { return deref<X>(); }
+
+protected:
+    any_ptr p_;
+
+    template <typename X> const X& deref() const {
+        if (X* xp = p_.as<X*>()) return *xp;
+        if (const X* xp = p_.as<const X*>()) return *xp;
+        throw std::bad_cast();
+    }
+};
+
+struct record_field_proxy: record_field_const_proxy {
+    explicit record_field_proxy(any_ptr p, std::function<void (std::any)> setter = {}):
+        record_field_const_proxy(std::move(p)), setter_(std::move(setter)) {}
+
+    record_field_proxy(const record_field_proxy&) = delete;
+    record_field_proxy& operator=(const record_field_proxy&) = delete;
+
+    template <typename X> record_field_proxy&& operator=(X&& x) && {
+        if (!setter_) {
+            using Y = std::remove_const_t<std::remove_reference_t<X>>;
+            if (Y* yp = p_.as<Y*>()) *yp = std::forward<X>(x);
+            else throw std::bad_cast();
+        }
+        else {
+            // Use supplied setter (so that we can hook in specification validators):
+            setter_(std::forward<X>(x));
+        }
+        return std::move(*this);
+    }
+
+protected:
+    std::function<void (std::any)> setter_;
+};
+
+struct keyed_const_view_impl_base;
+struct keyed_view_impl_base;
+
+struct keyed_const_view_impl_base {
+    virtual void rebind(any_ptr record_ptr) = 0;
+    virtual record_field_const_proxy at(std::string_view key) const = 0;
+    virtual keyed_const_view_impl_base* clone() const = 0;
+    virtual ~keyed_const_view_impl_base() {}
+};
+
+struct keyed_view_impl_base {
+    virtual void rebind(any_ptr record_ptr) = 0;
+    virtual record_field_proxy at(std::string_view key) const = 0;
+    virtual keyed_view_impl_base* clone() const = 0;
+    virtual keyed_const_view_impl_base* const_view() const = 0;
+    virtual ~keyed_view_impl_base() {}
+};
+
+template <typename Record>
+using smap_ptr = std::shared_ptr<specification_map<Record>>;
+
+template <typename Record>
+struct keyed_const_view_impl: keyed_const_view_impl_base {
+    const Record* rptr_;
+    smap_ptr<Record> smap_;
+
+    keyed_const_view_impl(const Record* rptr, smap_ptr<Record> smap):
+        rptr_(rptr), smap_(smap) {}
+
+    void rebind(any_ptr record_ptr) override {
+        if (!record_ptr) rptr_ = nullptr;
+        else if (const Record* p = record_ptr.as<const Record *>()) rptr_ = p;
+        else throw std::bad_cast();
+    }
+
+    record_field_const_proxy at(std::string_view key) const override {
+        if (!smap_ || !rptr_) return record_field_const_proxy{nullptr};
+        return record_field_const_proxy{smap_->at(key).retrieve(*rptr_).value_or(nullptr)}; // empty any_ptr if empty optional field.
+    }
+
+    keyed_const_view_impl* clone() const override {
+        return new keyed_const_view_impl{rptr_, smap_};
+    }
+};
+
+template <typename Record>
+struct keyed_view_impl: keyed_view_impl_base {
+    Record* rptr_;
+    smap_ptr<Record> smap_;
+
+    keyed_view_impl(Record* rptr, smap_ptr<Record> smap):
+        rptr_(rptr), smap_(smap) {}
+
+    void rebind(any_ptr record_ptr) override {
+        if (!record_ptr) rptr_ = nullptr;
+        else if (Record* p = record_ptr.as<Record *>()) rptr_ = p;
+        else throw std::bad_cast();
+    }
+
+    record_field_proxy at(std::string_view key) const override {
+        if (!smap_ || !rptr_) return record_field_proxy{nullptr};
+
+        const specification<Record>& spec = smap_->at(key);
+        return record_field_proxy(
+                spec.retrieve(*rptr_).value_or(nullptr),
+                [spec, r = rptr_](std::any a) {
+                    if (auto h = spec.assign(*r, std::move(a))) return;
+                    else if (h.error().error==failure::invalid_value) throw validation_failed(explain(std::move(h).error()));
+                    else throw parapara_error(explain(std::move(h).error()));
+                });
+    }
+
+    keyed_view_impl* clone() const override {
+        return new keyed_view_impl{rptr_, smap_};
+    }
+
+    keyed_const_view_impl<Record>* const_view() const override {
+        return new keyed_const_view_impl<Record>{rptr_, smap_};
+    }
+};
+} // namespace detail
+
+template <bool const_view> struct keyed_view;
+using mutable_keyed_view = keyed_view<false>;
+using const_keyed_view = keyed_view<true>;
+
+template <typename Record>
+keyed_view(Record&, specification_map<Record>) -> keyed_view<false>;
+template <typename Record>
+keyed_view(const Record&, specification_map<Record>) -> keyed_view<true>;
+
+// Mutable case
+template <>
+struct keyed_view<false> {
+    friend struct keyed_view<true>;
+
+    template <typename Record>
+    explicit keyed_view(Record& record, specification_map<Record> smap):
+        impl_(new detail::keyed_view_impl<Record>{
+            &record,
+            detail::smap_ptr<Record>{new specification_map<Record>(std::move(smap))}
+        })
+    {}
+
+    keyed_view(keyed_view&&) = default;
+    keyed_view(const keyed_view& other):
+        impl_(other.impl_->clone()) {}
+
+    keyed_view& operator=(keyed_view&& other) {
+        if (this!=&other) impl_ = std::move(other.impl_);
+        return *this;
+    }
+
+    keyed_view& operator=(const keyed_view& other) {
+        if (this!=&other) impl_.reset(other.impl_->clone());
+        return *this;
+    }
+
+    template <typename Record>
+    keyed_view& rebind(Record& record) {
+        impl_->rebind(&record);
+        return *this;
+    }
+
+    detail::record_field_proxy operator[](std::string_view key) {
+        return impl_->at(key);
+    }
+
+private:
+    std::unique_ptr<detail::keyed_view_impl_base> impl_;
+};
+
+// Constant case
+template <>
+struct keyed_view<true> {
+    template <typename Record>
+    explicit keyed_view(const Record& record, specification_map<Record> smap):
+        impl_(new detail::keyed_const_view_impl<Record>{
+            &record,
+            detail::smap_ptr<Record>{new specification_map<Record>(std::move(smap))}
+        })
+    {}
+
+    // Conversion from mutable keyed_view:
+    keyed_view(const keyed_view<false>& other):
+        impl_(other.impl_->const_view()) {}
+
+    keyed_view(keyed_view&&) = default;
+    keyed_view(const keyed_view& other):
+        impl_(other.impl_->clone()) {}
+
+
+    keyed_view& operator=(keyed_view&& other) {
+        if (this!=&other) impl_ = std::move(other.impl_);
+        return *this;
+    }
+
+    keyed_view& operator=(const keyed_view& other) {
+        if (this!=&other) impl_.reset(other.impl_->clone());
+        return *this;
+    }
+
+    template <typename Record>
+    keyed_view& rebind(const Record& record) {
+        impl_->rebind(&record);
+        return *this;
+    }
+
+    detail::record_field_const_proxy operator[](std::string_view key) {
+        return impl_->at(key);
+    }
+
+private:
+    std::unique_ptr<detail::keyed_const_view_impl_base> impl_;
+
+    // Construct directly from impl provided by keyed_view<false> conversion.
+    explicit keyed_view(detail::keyed_const_view_impl_base* impl_ptr):
+        impl_{impl_ptr} {}
+};
+
 
 // VI. Validation helpers
-// =====================
+// ----------------------
 //
 // The validator passed to the specification constructor can be any functional that takes a field value
 // of type U to hopefully<U>. The validator class below provides a convenience interface to producing
@@ -1648,7 +1890,7 @@ auto operator&=(V1 v1, V2 v2) {
 
 
 // VII. Importers and exporters
-// ====================================
+// ----------------------------
 //
 // import_k_eq_v:
 //
