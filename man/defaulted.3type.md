@@ -2,7 +2,7 @@
 
 # NAME
 
-parapara::defaulted<T> - wrapper for std::optional with default value
+parapara::defaulted\<T\> - wrapper for std::optional with default value
 
 # SYNOPSIS
 
