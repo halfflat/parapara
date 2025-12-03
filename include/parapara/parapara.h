@@ -1013,7 +1013,7 @@ struct read_dsv {
             auto hf = read_field? read_field(f_repn): rdr.read<value_type>(f_repn);
             if (hf) {
                 fields.push_back(std::move(hf.value()));
-                if (d!=npos) v.remove_prefix(d+1);
+                if (d!=npos) v.remove_prefix(d+delim.length());
                 else break;
             }
             else {
