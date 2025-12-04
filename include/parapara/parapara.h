@@ -8,6 +8,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -1336,8 +1337,12 @@ struct specification {
     // validate. validate must satisfy the requirement that given a value x of type Field,
     // validate(x) is convertible to a value of type hopefully<Field>.
 
-    template <typename Field, typename V, std::enable_if_t<validates_parameter_v<V, Field>, int> = 0>
-    specification(std::string key, Field Record::* field_ptr, V validate, std::string description = ""):
+    template <
+        typename Field, typename Base, typename V,
+        std::enable_if_t<validates_parameter_v<V, Field>, int> = 0,
+        std::enable_if_t<std::is_base_of_v<Base, Record>, int> = 0
+    >
+    specification(std::string key, Field Base::* field_ptr, V validate, std::string description = ""):
         key(std::move(key)),
         description(description),
         field_type(std::type_index(typeid(base_field_t<Field>))),
@@ -1378,18 +1383,21 @@ struct specification {
 
     // As above, but with trivial validator.
 
-    template <typename Field>
-    specification(std::string key, Field Record::* field_ptr, std::string description = ""):
+    template <typename Field, typename Base, std::enable_if_t<std::is_base_of_v<Base, Record>, int> = 0>
+    specification(std::string key, Field Base::* field_ptr, std::string description = ""):
         specification(key, field_ptr, [](auto&& x) { return decltype(x)(x); }, description)
     {}
 
     // For a field of non-optional class type Field, delegate retrieval, assignment and validation of a member of
     // that field to another specification of type specification<Field>.
 
-    template <typename Field,
-              typename std::enable_if_t<!is_optional_v<Field>, int> = 0,
-              typename std::enable_if_t<std::is_class_v<Field>, int> = 0>
-    specification(std::string key, Field Record::* field_ptr, const specification<Field>& delegate, std::string description):
+    template <
+        typename Field, typename Base,
+        typename std::enable_if_t<!is_optional_v<Field>, int> = 0,
+        typename std::enable_if_t<std::is_class_v<Field>, int> = 0,
+        typename std::enable_if_t<std::is_base_of_v<Base, Record>, int> = 0
+    >
+    specification(std::string key, Field Base::* field_ptr, const specification<Field>& delegate, std::string description):
         key(std::move(key)),
         description(description),
         field_type(delegate.field_type),
@@ -1410,9 +1418,12 @@ struct specification {
 
     // As above, but take the description from the delegated specification.
 
-    template <typename Field,
-              typename std::enable_if_t<!is_optional_v<Field>, int> = 0>
-    specification(std::string key, Field Record::* field_ptr, const specification<Field>& delegate):
+    template <
+        typename Field, typename Base,
+        typename std::enable_if_t<!is_optional_v<Field>, int> = 0,
+        typename std::enable_if_t<std::is_base_of_v<Base, Record>, int> = 0
+    >
+    specification(std::string key, Field Base::* field_ptr, const specification<Field>& delegate):
         specification(key, field_ptr, delegate, delegate.description)
     {}
 
