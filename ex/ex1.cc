@@ -32,7 +32,7 @@ int main() {
         std::vector<int> xs;
     } rec;
 
-    parapara::specification x_spec{"x", &record::x};
+    parapara::specification<record> x_spec{"x", &record::x};
     if (auto hv = x_spec.assign(rec, 7)) {
         std::cout << "ok; record.x = " << rec.x << '\n';
     }
@@ -40,7 +40,7 @@ int main() {
         std::cout << explain(hv.error()) << '\n';
     }
 
-    parapara::specification xs_spec{"xs", &record::xs};
+    parapara::specification<record> xs_spec{"xs", &record::xs};
     if (auto hv = xs_spec.read(rec, "3, 4, 5")) {
         std::cout << "ok; record.xs = ";
         for (auto& f: rec.xs) std::cout << f << ' ';
@@ -52,7 +52,7 @@ int main() {
 
     parapara::validator require_even([](auto n) { return !(n%2); }, "value is even");
 
-    parapara::specification x_spec2("x", &record::x,
+    parapara::specification<record> x_spec2("x", &record::x,
         parapara::nonzero() &=
         require_even &=
         parapara::at_most(10, "value is at most 10"));

@@ -3,7 +3,7 @@
 
 top:=$(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 
-examples:=ex1 ex2 ex3 ex4 ex5 ex6 ex-defaulted ex-map-wrapper
+examples:=ex1 ex2 ex3 ex4 ex5 ex6 ex-defaulted ex-map-wrapper ex-delegate
 all:: unit $(examples) man
 
 test-src:=unit.cc test_failure.cc test_utility.cc test_reader.cc test_rw_helpers.cc test_rw_defaults.cc test_defaulted.cc
@@ -62,6 +62,9 @@ ex-defaulted: ex-defaulted.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
 ex-map-wrapper: ex-map-wrapper.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+ex-delegate: ex-delegate.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
 
 man: man3 man3type man7
