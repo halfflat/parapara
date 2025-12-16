@@ -8,6 +8,8 @@
 namespace P = parapara;
 
 P::hopefully<std::string> write_qstring(const std::string& s, const std::string& delim = "") {
+    using strsize_t = std::string::size_type;
+
     // \? is explicitly omitted: avoiding trigraphs is not relevant.
     // \' is explicitly omitted: unnecessary in double-quoted string representation.
     constexpr char esc_tbl[128][4] = {
@@ -42,7 +44,7 @@ P::hopefully<std::string> write_qstring(const std::string& s, const std::string&
     // quote if leading space
     esc |= s[0]==' ';
 
-    // quote if string contains 
+    // quote and escape special characters from esc_tbl.
 
     for (char c: s) {
         std::uint8_t u = c;
@@ -55,6 +57,35 @@ P::hopefully<std::string> write_qstring(const std::string& s, const std::string&
     }
     q.push_back('"');
 
+    // quote if string contains delim or begins with a non-empty tail of delim
+    // or ends with a non-empty prefix of delim. It is over-cautious for utf8
+    // encoded strings.
+
+    if (!esc && !delim.empty()) {
+        constexpr strsize_t npos = std::string_view::npos;
+        std::string_view sv(s);
+        std::string_view dv(delim);
+
+        strsize_t sv_sz = sv.length();
+        strsize_t dv_sz = dv.length();
+
+        if (dv_sz==1) {
+            esc |= sv.find(dv[0]) != npos;
+        }
+        else {
+            strsize_t max_subdelim = std::min(sv_sz, dv_sz-1);
+            for (strsize_t k = 1; k <= max_subdelim && !esc; ++k) {
+                esc |= dv.substr(dv_sz-k) == sv.substr(0, k);
+            }
+ 
+            for (strsize_t k = 1; k <= max_subdelim && !esc; ++k) {
+                esc |= dv.substr(0, k) == sv.substr(sv_sz-k);
+            }
+
+            if (!esc) esc |= sv.find(dv) != npos;
+        }
+    }
+
     return esc? q: s;
 }
 
@@ -64,7 +95,7 @@ int main() {
     parapara::reader R = parapara::default_reader();
     parapara::writer W = parapara::default_writer();
 
-    std::string writer_examples[] = {
+    std::string writer_examples_a[] = {
         R"(apple badge)",
         R"("apple badge")",
         R"(apple 'badge')",
@@ -74,7 +105,48 @@ int main() {
         "\n\rapple\037 badge"
     };
 
-    for (const auto& s: writer_examples) {
+    std::cout << "Examples checking escaped characters:\n\n";
+
+    for (const auto& s: writer_examples_a) {
         std::cout << "value: " << s << "\n repn: " << write_qstring(s).value() << "\n\n";
     }
+
+    std::cout << "Examples checking quoting for delimiters, with delimiter 'and':\n";
+
+    std::string writer_examples_b[] = {
+        "cake",
+        "cake and coffee",
+        "a coffee",
+        "an coffee",
+        "and coffee",
+        "d coffee",
+        "nd coffee",
+        "cake a",
+        "cake an",
+        "cake and",
+        "cake nd",
+        "cake d",
+    };
+
+    for (const auto& s: writer_examples_b) {
+        std::cout << "value: " << s << "\n repn: " << write_qstring(s, "and").value() << "\n\n";
+    }
+
+    std::cout << "Examples checking quoting for delimiters, with delimiter '---':\n\n";
+    std::string writer_examples_c[] = {
+        "pomme-frites",
+        "pomme--frites",
+        "pomme---frites",
+        "-pomme frites",
+        "--pomme frites",
+        "---pomme frites",
+        "pomme frites-",
+        "pomme frites--",
+        "pomme frites---",
+    };
+
+    for (const auto& s: writer_examples_c) {
+        std::cout << "value: " << s << "\n repn: " << write_qstring(s, "---").value() << "\n\n";
+    }
+
 }
