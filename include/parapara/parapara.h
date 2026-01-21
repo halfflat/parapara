@@ -2,6 +2,7 @@
 
 #include <any>
 #include <charconv>
+#include <cstdint>
 #include <functional>
 #include <iomanip>
 #include <initializer_list>
@@ -961,11 +962,92 @@ hopefully<T> read_numeric(std::string_view v) {
 
 // - Read a string, without any filters
 
-inline hopefully<std::string> read_string(std::string_view v) {
+inline hopefully<std::string> read_string_raw(std::string_view v) {
     return std::string(v);
 }
 
-// - Read a boolean true/false representation, case sensitive
+// - Read a possibly double-quoted string with C-style \ escape sequences.
+//   Escape sequences will only be interpreted if the view is indeed double-quoted.
+
+inline hopefully<std::string> read_qstring(std::string_view v) {
+    if (v.empty() || v[0] !='"') return std::string(v);
+
+    enum state { regular, q1, q2, esc1, esc2, esc3 } state = q1;
+    unsigned char octal_esc = 0;
+    std::string s;
+    s.reserve(v.length());
+
+    for (auto c: v) {
+    redo:
+        switch (state) {
+        case q1:
+            state = regular;
+            continue;
+        case regular:
+            switch (c) {
+            case '"':
+                state = q2;
+                continue;
+            case '\\':
+                state = esc1;
+                continue;
+            }
+            s.push_back(c);
+            continue;
+        case q2:
+            return read_failure();
+        case esc1:
+            switch (c) {
+            case 'a':
+                c = 7; break;
+            case 'b':
+                c = 8; break;
+            case 't':
+                c = 9; break;
+            case 'n':
+                c = 10; break;
+            case 'v':
+                c = 11; break;
+            case 'f':
+                c = 12; break;
+            case 'r':
+                c = 13; break;
+            default:
+                if (c>='0' && c<='7') {
+                    octal_esc = c-'0';
+                    state = esc2;
+                    continue;
+                }
+            }
+            s.push_back(c);
+            state = regular;
+            continue;
+        case esc2:
+            if (c>='0' && c<='7') {
+                octal_esc = 8*octal_esc + (c-'0');
+                state = esc3;
+                continue;
+            }
+            s.push_back(octal_esc);
+            state = regular;
+            goto redo;
+        case esc3:
+            if (c>='0' && c<='7') {
+                octal_esc = 8*octal_esc + (c-'0');
+                s.push_back(octal_esc);
+                state = regular;
+                continue;
+            }
+            s.push_back(octal_esc);
+            state = regular;
+            goto redo;
+        }
+    }
+    if (state!=q2) return read_failure();
+    else return s;
+}
+
+// - Read a boolean true/false representation, case sensitive.
 
 inline hopefully<bool> read_bool_alpha(std::string_view v) {
     if (v=="true") return true;
@@ -1114,8 +1196,114 @@ hopefully<std::string> write_numeric(const T& v) {
 
 // - Write a string, without any filters (very boring)
 
-inline hopefully<std::string> write_string(const std::string& v) {
+inline hopefully<std::string> write_string_raw(const std::string& v) {
     return v;
+}
+
+// - Write a string, C-style escaping special characters and conditionally double-quoting it.
+//   Double quotes are applied if there are leading spaces, if it would be ambiguously delimitted
+//   by the supplied delimiter, or if it contains any characters that would be escaped.
+
+struct write_qstring_conditional {
+    bool always_quote_ = false;
+    std::string delim_;
+
+    explicit write_qstring_conditional(bool always_quote = false):
+        always_quote_(always_quote)
+    {}
+
+    explicit write_qstring_conditional(const char* delim):
+        always_quote_(false), delim_(delim)
+    {}
+
+    explicit write_qstring_conditional(std::string delim):
+        always_quote_(false), delim_(std::move(delim))
+    {}
+
+    hopefully<std::string> operator()(const std::string& s) const {
+        constexpr auto npos = std::string_view::npos;
+
+        // \? is explicitly omitted: avoiding trigraphs is not relevant.
+        // \' is explicitly omitted: unnecessary in double-quoted string representation.
+        constexpr char esc_tbl[128][4] = {
+            // 0x00
+            "000", "001", "002", "003", "004", "005", "006", "a",
+            "b",   "t",   "n",   "v",   "f",   "r",   "016", "017",
+            // 0x10
+            "020", "021", "022", "023", "024", "025", "026", "027",
+            "030", "031", "032", "033", "034", "035", "036", "037",
+            // 0x20
+            "",    "",    "\"",  "",    "",    "",    "",    "",
+            "",    "",    "",    "",    "",    "",    "",    "",
+            // 0x30
+            "",    "",    "",    "",    "",    "",    "",    "",
+            "",    "",    "",    "",    "",    "",    "",    "",
+            // 0x40
+            "",    "",    "",    "",    "",    "",    "",    "",
+            "",    "",    "",    "",    "",    "",    "",    "",
+            // 0x50
+            "",    "",    "",    "",    "",    "",    "",    "",
+            "",    "",    "",    "",    "\\",  "",    "",    ""
+            // remainder is all zero
+        };
+
+        bool quote = always_quote_;
+
+        if (s.empty()) return quote? "\"\"": "";
+
+        // The scratch string is used to test for ambiguous terminal deliminator substrings
+        // and for staging a quoted and escaped output string.
+
+        std::string scratch;
+        scratch.reserve(2+4*s.length()+2*delim_.length());
+
+        // Quote if string has leading space.
+
+        quote |= s[0]==' ';
+
+        // Quote if string contains delim or partially contains delim in a manner
+        // that could lead to ambiguous determination of extent if prefixed or suffixed
+        // by delim.
+
+        if (!quote) {
+            switch (auto dlen = delim_.length()) {
+            case 0:
+                break;
+            case 1:
+                quote |= s.find(delim_[0]) != npos;
+                break;
+            default:
+                scratch.assign(delim_, 1);
+                scratch.append(s);
+                scratch.append(delim_, 0, dlen-1);
+                quote |= scratch.find(delim_) != npos;
+            }
+        }
+
+        // Quote and escape special characters from esc_tbl if present.
+
+        scratch.assign("\"");
+        for (char c: s) {
+            std::uint8_t u = c;
+            if (u<128 && esc_tbl[u][0]) {
+                quote = true;
+                scratch.push_back('\\');
+                scratch.append(esc_tbl[u]);
+            }
+            else scratch.push_back(u);
+        }
+        scratch.push_back('"');
+
+        return quote? scratch: std::string(s);
+    }
+};
+
+inline hopefully<std::string> write_qstring(const std::string& v) {
+    return write_qstring_conditional{}(v);
+}
+
+inline hopefully<std::string> write_qstring_always(const std::string& v) {
+    return write_qstring_conditional{true}(v);
 }
 
 // - Write a boolean true/false representation, case sensitive
@@ -1219,6 +1407,7 @@ inline reader<std::string_view> make_default_reader() {
         read_dsv<std::vector<float>>{},
         read_dsv<std::vector<double>>{},
         read_dsv<std::vector<long double>>{},
+        read_dsv<std::vector<std::string>>{},
         read_defaulted<short>{},
         read_defaulted<unsigned short>{},
         read_defaulted<int>{},
@@ -1231,7 +1420,7 @@ inline reader<std::string_view> make_default_reader() {
         read_defaulted<double>{},
         read_defaulted<long double>{},
         read_defaulted<bool>{},
-        read_string
+        read_qstring
     );
 }
 
@@ -1269,6 +1458,7 @@ inline writer<std::string> make_default_writer() {
         write_dsv<std::vector<float>>{},
         write_dsv<std::vector<double>>{},
         write_dsv<std::vector<long double>>{},
+        write_dsv<std::vector<std::string>>{write_qstring_conditional{","}},
         write_defaulted<short>{},
         write_defaulted<unsigned short>{},
         write_defaulted<int>{},
@@ -1281,7 +1471,7 @@ inline writer<std::string> make_default_writer() {
         write_defaulted<double>{},
         write_defaulted<long double>{},
         write_defaulted<bool>{},
-        write_string
+        write_qstring
     );
 }
 

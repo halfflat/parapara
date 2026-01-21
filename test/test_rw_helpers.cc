@@ -19,25 +19,25 @@ TEST(parapara, rw_numeric) {
             {
                 hopefully<T> hn = read_numeric_fallback<T>(repn);
                 EXPECT_TRUE(hn) << "read_numeric_fallback failed on '" << repn << '"';
-                if (hn) EXPECT_EQ(n, hn.value());
+                if (hn) { EXPECT_EQ(n, hn.value()); }
             }
 
             if constexpr (can_from_chars_v<T>) {
                 hopefully<T> hn = read_cc<T>(repn);
                 EXPECT_TRUE(hn);
-                if (hn) EXPECT_EQ(n, hn.value());
+                if (hn) { EXPECT_EQ(n, hn.value()); }
             }
 
             if (!skip_write_fallback) {
                 hopefully<std::string> hs = write_numeric_fallback(n);
                 EXPECT_TRUE(hs) << "write_numeric_fallback failed on '" << repn << '"';
-                if (hs) EXPECT_EQ(repn, hs.value());
+                if (hs) { EXPECT_EQ(repn, hs.value()); }
             }
 
             if constexpr (can_to_chars_v<T>) {
                 hopefully<std::string> hs = write_cc(n);
                 EXPECT_TRUE(hs);
-                if (hs) EXPECT_EQ(repn, hs.value());
+                if (hs) { EXPECT_EQ(repn, hs.value()); }
             }
         }
     };

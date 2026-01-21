@@ -7,6 +7,7 @@
 
 namespace P = parapara;
 
+#if 0
 P::hopefully<std::string> read_qstring(std::string_view v) {
     if (v.empty() || v[0] !='"') return std::string(v);
 
@@ -174,6 +175,7 @@ struct write_qstring {
         return quote? scratch: std::string(s);
     }
 };
+#endif
 
 int main() {
     parapara::reader R = parapara::default_reader();
@@ -191,9 +193,8 @@ int main() {
 
     std::cout << "Examples checking escaped characters:\n\n";
 
-    write_qstring writer_a;
     for (const auto& s: writer_examples_a) {
-        std::cout << "value: " << s << "\n repn: " << writer_a(s).value() << "\n\n";
+        std::cout << "value: " << s << "\n repn: " << P::write_qstring(s).value() << "\n\n";
     }
 
     std::cout << "Examples checking quoting for delimiters, with delimiter \"an'a\":\n\n";
@@ -210,9 +211,8 @@ int main() {
         "cake and",
     };
 
-    write_qstring writer_b("an'a");
     for (const auto& s: writer_examples_b) {
-        std::cout << "value: " << s << "\n repn: " << writer_b(s).value() << "\n\n";
+        std::cout << "value: " << s << "\n repn: " << P::write_qstring_conditional{"an'a"}(s).value() << "\n\n";
     }
 
     std::cout << "Examples checking quoting for delimiters, with delimiter \"---\":\n\n";
@@ -228,9 +228,8 @@ int main() {
         "pomme frites---",
     };
 
-    write_qstring writer_c("---");
     for (const auto& s: writer_examples_c) {
-        std::cout << "value: " << s << "\n repn: " << writer_c(s).value() << "\n\n";
+        std::cout << "value: " << s << "\n repn: " << P::write_qstring_conditional{"---"}(s).value() << "\n\n";
     }
 
     std::cout << "Unquoting -> requoting examples:\n\n";
@@ -243,8 +242,7 @@ int main() {
         R"("no closing quote)",
         R"("stuff after" quote)"
     };
-    write_qstring writer_d;
     for (const auto& s: reader_examples) {
-        std::cout << "encoded:    " << s << "\nre-encoded: " << read_qstring(s).and_then(writer_d).value_or("<read error>") << "\n\n";
+        std::cout << "encoded:    " << s << "\nre-encoded: " << P::read_qstring(s).and_then(P::write_qstring).value_or("<read error>") << "\n\n";
     };
 }
