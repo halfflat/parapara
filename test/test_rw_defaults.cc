@@ -79,3 +79,33 @@ TEST(parapara, rw_dsv) {
         EXPECT_EQ("234‡345‡456"s, hs.value());
     }
 }
+
+TEST(parapara, rw_qstring) {
+    using namespace std::literals;
+
+    std::pair<std::string, std::string> tests[] = {
+        {           R"()",                R"("")" },
+        {          R"(')",               R"("'")" },
+        {          R"(")",              R"("\"")" },
+        {        R"(abc)",             R"("abc")" },
+        {        R"(a\c)",            R"("a\\c")" },
+        {  "\007\010\011",          R"("\a\b\t")" },
+        {  "\012\013\014",          R"("\n\v\f")" },
+        {  "\015\016\141",         R"("\r\016a")" },
+        {      "a\0b\0c"s,   "\"a\\000b\\000c\""s }
+    };
+
+    for (auto& [u, q]: tests) {
+        auto mq = write_qstring_always(u);
+        ASSERT_TRUE(mq);
+        EXPECT_EQ(q, mq.value());
+        auto mu = read_qstring(q);
+        ASSERT_TRUE(mu);
+        EXPECT_EQ(u, mu.value());
+    }
+
+    EXPECT_FALSE(read_qstring(R"("half-quoted)"));
+    EXPECT_FALSE(read_qstring(R"("quoted"trailing)"));
+
+    EXPECT_EQ("unquoted\\a"s, read_qstring(R"(unquoted\a)").value_or(""s));
+}
