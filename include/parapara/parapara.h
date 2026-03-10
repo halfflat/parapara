@@ -1249,7 +1249,7 @@ struct write_qstring_conditional {
 
         bool quote = always_quote_;
 
-        if (s.empty()) return quote? "\"\"": "";
+        if (s.empty()) return quote || !delim_.empty()? "\"\"": "";
 
         // The scratch string is used to test for ambiguous terminal deliminator substrings
         // and for staging a quoted and escaped output string.
@@ -1324,7 +1324,7 @@ struct write_dsv {
     explicit write_dsv(std::function<hopefully<std::string> (const value_type&)> write_field, std::string delim=","):
         write_field(std::move(write_field)), delim(delim) {}
 
-    explicit write_dsv(std::string delim=","):
+    explicit write_dsv(std::string delim = ","):
         write_field{}, delim(delim) {}
 
     hopefully<std::string> operator()(const C& fields, const writer<std::string>& wtr) const {
