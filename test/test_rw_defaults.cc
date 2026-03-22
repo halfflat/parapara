@@ -122,7 +122,7 @@ TEST(parapara, write_qstring_conditional) {
     auto write_qstring_csv = write_qstring_conditional{","};
 
     std::string expect_unquoted[] = {
-        ""s,
+        ""s,        // Empty strings stay empty.
         "\177"s,    // [Del] isn't escaped.
         "a  "s,     // Trailing space okay too.
         "a b  d'"s  // Single quote fine.
@@ -157,10 +157,11 @@ TEST(parapara, write_qstring_conditional) {
     }
 
     // write_qstring_csv should quote strings with commas though.
+
     EXPECT_EQ("\"a,b,c\""s, write_qstring_csv("a,b,c"s).value());
     EXPECT_EQ("a,b,c"s, write_qstring("a,b,c"s).value());
 
-    // Confirm quoting of strings with ambiguous verminal fragments of
+    // Confirm quoting of strings with ambiguous terminal fragments of
     // multi-character delimiters.
 
     auto wqsc__ = write_qstring_conditional{"__"};

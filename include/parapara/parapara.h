@@ -969,82 +969,109 @@ inline hopefully<std::string> read_string_raw(std::string_view v) {
 // - Read a possibly double-quoted string with C-style \ escape sequences.
 //   Escape sequences will only be interpreted if the view is indeed double-quoted.
 
-inline hopefully<std::string> read_qstring(std::string_view v) {
-    if (v.empty() || v[0] !='"') return std::string(v);
+inline hopefully<std::pair<std::string, std::size_t>> read_qstring_upto_delim(std::string_view v, const std::string& delim = "") {
+    using sn_t = std::pair<std::string, std::size_t>;
+    constexpr std::size_t npos = std::string_view::npos;
 
-    enum state { regular, q1, q2, esc1, esc2, esc3 } state = q1;
-    unsigned char octal_esc = 0;
-    std::string s;
-    s.reserve(v.length());
+    if (v.empty()) return sn_t{std::string{}, 0};
+    if (v[0]!='"') {
+        std::size_t n = npos;
+        if (!delim.empty()) n = v.find(delim);
 
-    for (auto c: v) {
-    redo:
-        switch (state) {
-        case q1:
-            state = regular;
-            continue;
-        case regular:
-            switch (c) {
-            case '"':
-                state = q2;
-                continue;
-            case '\\':
-                state = esc1;
-                continue;
-            }
-            s.push_back(c);
-            continue;
-        case q2:
-            return read_failure();
-        case esc1:
-            switch (c) {
-            case 'a':
-                c = 7; break;
-            case 'b':
-                c = 8; break;
-            case 't':
-                c = 9; break;
-            case 'n':
-                c = 10; break;
-            case 'v':
-                c = 11; break;
-            case 'f':
-                c = 12; break;
-            case 'r':
-                c = 13; break;
-            default:
-                if (c>='0' && c<='7') {
-                    octal_esc = c-'0';
-                    state = esc2;
-                    continue;
-                }
-            }
-            s.push_back(c);
-            state = regular;
-            continue;
-        case esc2:
-            if (c>='0' && c<='7') {
-                octal_esc = 8*octal_esc + (c-'0');
-                state = esc3;
-                continue;
-            }
-            s.push_back(octal_esc);
-            state = regular;
-            goto redo;
-        case esc3:
-            if (c>='0' && c<='7') {
-                octal_esc = 8*octal_esc + (c-'0');
-                s.push_back(octal_esc);
+        if (n==npos) return sn_t{v, v.length()};
+        else return sn_t{std::string(v, 0, n), n};
+    }
+    else {
+        enum state { regular, q1, q2, esc1, esc2, esc3 } state = q1;
+        unsigned char octal_esc = 0;
+        std::string s;
+        s.reserve(v.length());
+        std::size_t n = 0;
+
+        for (; n<v.size(); ++n) {
+            char c = v[n];
+        redo:
+            switch (state) {
+            case q1:
                 state = regular;
                 continue;
+            case q2:
+                break;
+            case regular:
+                switch (c) {
+                case '"':
+                    state = q2;
+                    continue;
+                case '\\':
+                    state = esc1;
+                    continue;
+                }
+                s.push_back(c);
+                continue;
+            case esc1:
+                switch (c) {
+                case 'a':
+                    c = 7; break;
+                case 'b':
+                    c = 8; break;
+                case 't':
+                    c = 9; break;
+                case 'n':
+                    c = 10; break;
+                case 'v':
+                    c = 11; break;
+                case 'f':
+                    c = 12; break;
+                case 'r':
+                    c = 13; break;
+                default:
+                    if (c>='0' && c<='7') {
+                        octal_esc = c-'0';
+                        state = esc2;
+                        continue;
+                    }
+                }
+                s.push_back(c);
+                state = regular;
+                continue;
+            case esc2:
+                if (c>='0' && c<='7') {
+                    octal_esc = 8*octal_esc + (c-'0');
+                    state = esc3;
+                    continue;
+                }
+                s.push_back(octal_esc);
+                state = regular;
+                goto redo;
+            case esc3:
+                if (c>='0' && c<='7') {
+                    octal_esc = 8*octal_esc + (c-'0');
+                    s.push_back(octal_esc);
+                    state = regular;
+                    continue;
+                }
+                s.push_back(octal_esc);
+                state = regular;
+                goto redo;
             }
-            s.push_back(octal_esc);
-            state = regular;
-            goto redo;
+            break;
         }
+
+        if (state!=q2) return read_failure();
+
+        auto tail = v.substr(n, delim.size());
+        if (!tail.empty() && tail!=delim) return read_failure();
+
+        return sn_t{std::move(s), n};
     }
-    if (state!=q2) return read_failure();
-    else return s;
+}
+
+inline hopefully<std::string> read_qstring(std::string_view v) {
+    return read_qstring_upto_delim(v).and_then(
+            [l = v.length()](auto sn) -> hopefully<std::string> {
+                if (sn.second!=l) return read_failure(); else return std::move(sn.first);
+            }
+        );
 }
 
 // - Read a boolean true/false representation, case sensitive.
@@ -1105,6 +1132,40 @@ struct read_dsv {
         }
 
         return v.empty()? C{}: C{&fields.front(), &fields.front()+fields.size()};
+    }
+};
+
+// - Read a delimitter-separated list of (potentially) quoted strings;
+//   C represents a container type, constructible from an iterator range.
+
+template <typename C,
+          std::enable_if_t<std::is_constructible_v<C, std::move_iterator<const std::string*>, std::move_iterator<const std::string*>>, int> = 0>
+struct read_dsv_qstring {
+    std::string delim;      // field separator
+    const bool skip_ws;     // if true, skip leading space/tabs in each field
+
+    explicit read_dsv_qstring(std::string delim=",", bool skip_ws = true):
+        delim(std::move(delim)), skip_ws(skip_ws) {}
+
+    hopefully<C> operator()(std::string_view v) const {
+        constexpr auto npos = std::string_view::npos;
+        std::vector<std::string> fields;
+        while (!v.empty()) {
+            if (skip_ws) {
+                auto ns = v.find_first_not_of(" \t");
+                if (ns!=npos) v.remove_prefix(ns);
+            }
+            if (auto hsn = read_qstring_upto_delim(v, delim)) {
+                fields.emplace_back(std::move(hsn.value().first));
+                v.remove_prefix(hsn.value().second);
+                if (!v.empty()) v.remove_prefix(delim.length());
+            }
+            else {
+                return unexpected(std::move(hsn.error()));
+            }
+        }
+
+        return fields.empty()? C{}: C{&fields.front(), &fields.front()+fields.size()};
     }
 };
 
@@ -1249,7 +1310,7 @@ struct write_qstring_conditional {
 
         bool quote = always_quote_;
 
-        if (s.empty()) return quote || !delim_.empty()? "\"\"": "";
+        if (s.empty()) return quote? "\"\"": "";
 
         // The scratch string is used to test for ambiguous terminal deliminator substrings
         // and for staging a quoted and escaped output string.
@@ -1318,14 +1379,14 @@ template <typename C,
           std::enable_if_t<has_value_type_v<C>, int> = 0>
 struct write_dsv {
     using value_type = typename C::value_type;
-    std::function<hopefully<std::string> (const value_type&)> write_field; // if empty, use supplied writer
-    std::string delim;      // field separator
+    std::function<hopefully<std::string> (const value_type&)> write_field_; // if empty, use supplied writer
+    std::string delim_;      // field separator
 
     explicit write_dsv(std::function<hopefully<std::string> (const value_type&)> write_field, std::string delim=","):
-        write_field(std::move(write_field)), delim(delim) {}
+        write_field_(std::move(write_field)), delim_(delim) {}
 
     explicit write_dsv(std::string delim = ","):
-        write_field{}, delim(delim) {}
+        write_field_{}, delim_(delim) {}
 
     hopefully<std::string> operator()(const C& fields, const writer<std::string>& wtr) const {
         using std::begin;
@@ -1338,17 +1399,32 @@ struct write_dsv {
 
         std::string out;
         for (;;) {
-            auto h = write_field? write_field(*b++): wtr.write(*b++);
+            auto h = write_field_? write_field_(*b++): wtr.write(*b++);
             if (h) out += h.value();
             else return h;
 
             if (b==e) break;
-            out += delim;
+            out += delim_;
         }
 
         return out;
     }
 };
+
+// Write a delimitter-separated list of quoted strings, where the quoting respects the delimiter.
+// C represents a container type.
+
+template <typename C>
+struct write_dsv_qstring {
+    write_dsv<C> write_dsv_;
+
+    explicit write_dsv_qstring(std::string delim = ","): write_dsv_(write_qstring_conditional{delim}, delim) {}
+
+    hopefully<std::string> operator()(const C& fields) const {
+        return write_dsv_(fields, {});
+    }
+};
+
 
 // - Write a defaulted<X> value with a specific representation indicating unassigned.
 
