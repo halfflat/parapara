@@ -47,7 +47,7 @@ template <typename X>
 std::vector<P::specification<X>> make_superfoobinator_specifications() {
     return extend(make_foobinator_specifications<X>(), {
         {"dooper", &X::dooper, "super foobinator dooper rank"},
-        {"boggle", &X::boggle, "boogle?"}
+        {"boggle", &X::boggle, "boggle?"}
      });
 }
 
